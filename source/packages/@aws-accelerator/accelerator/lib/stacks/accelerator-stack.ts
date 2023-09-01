@@ -1176,7 +1176,46 @@ export abstract class AcceleratorStack extends cdk.Stack {
     lambdaKey: cdk.aws_kms.Key,
   ): ServiceLinkedRole {
     // create service linked roles only in the partitions that allow it
-    return this.createServiceLinkedRole(ServiceLinkedRoleType.FMS, cloudwatchKey, lambdaKey);
+    const serviceLinkedRole = this.createServiceLinkedRole(ServiceLinkedRoleType.FMS, cloudwatchKey, lambdaKey);
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM4,
+      details: [
+        {
+          path: `${this.stackName}/FirewallManagerServiceLinkedRole/CreateServiceLinkedRoleFunction/ServiceRole/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM5,
+      details: [
+        {
+          path: `${this.stackName}/FirewallManagerServiceLinkedRole/CreateServiceLinkedRoleFunction/ServiceRole/DefaultPolicy/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM4,
+      details: [
+        {
+          path: `${this.stackName}/FirewallManagerServiceLinkedRole/CreateServiceLinkedRoleProvider/framework-onEvent/ServiceRole/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM5,
+      details: [
+        {
+          path: `${this.stackName}/FirewallManagerServiceLinkedRole/CreateServiceLinkedRoleProvider/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+    return serviceLinkedRole;
   }
   /**
    * Function to create Service Linked Role for given type

@@ -13,7 +13,7 @@
 
 import { SdkProvider } from 'aws-cdk/lib/api/aws-auth';
 import { BootstrapEnvironmentOptions, Bootstrapper, BootstrapSource } from 'aws-cdk/lib/api/bootstrap';
-import { Deployments } from 'aws-cdk/lib/api/deployments';
+import { CloudFormationDeployments } from 'aws-cdk/lib/api/cloudformation-deployments';
 import { StackSelector } from 'aws-cdk/lib/api/cxapp/cloud-assembly';
 import { CloudExecutable } from 'aws-cdk/lib/api/cxapp/cloud-executable';
 import { execProgram } from 'aws-cdk/lib/api/cxapp/exec';
@@ -152,7 +152,7 @@ export class AcceleratorToolkit {
       },
     });
 
-    const deployments = new Deployments({ sdkProvider });
+    const cloudFormation = new CloudFormationDeployments({ sdkProvider });
 
     let outDirLock: ILock | undefined;
     const cloudExecutable = new CloudExecutable({
@@ -170,7 +170,7 @@ export class AcceleratorToolkit {
 
     const cli = new CdkToolkit({
       cloudExecutable,
-      deployments,
+      cloudFormation,
       configuration,
       sdkProvider,
     });

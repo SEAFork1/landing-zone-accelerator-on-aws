@@ -80,28 +80,9 @@ export class ServiceLinkedRole extends Construct {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    const customResourceLambdaInvokeRole = new cdk.aws_iam.Role(this, 'CreateServiceLinkedRoleProviderRole', {
-      assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
-      description: 'Testing fix for lambda:GetFunctionConfiguration...',
-      managedPolicies: [
-        cdk.aws_iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-        new cdk.aws_iam.ManagedPolicy(this, 'CreateServiceLinkedRoleProviderRolePolicy', {
-          statements: [
-            new cdk.aws_iam.PolicyStatement({
-              effect: cdk.aws_iam.Effect.ALLOW,
-              actions: ['lambda:GetFunctionConfiguration', 'lambda:InvokeFunction'],
-              resources: ['*'],
-            }),
-          ],
-        }),
-      ],
-    });
-
     const provider = new cdk.custom_resources.Provider(this, 'CreateServiceLinkedRoleProvider', {
       onEventHandler: lambdaFunction,
-      role: customResourceLambdaInvokeRole,
     });
-
 
     const resource = new cdk.CustomResource(this, 'CreateServiceLinkedRoleResource', {
       resourceType: 'Custom::CreateServiceLinkedRole',
