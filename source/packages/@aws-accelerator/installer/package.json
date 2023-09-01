@@ -50,6 +50,6 @@
     "@aws-accelerator/accelerator": "^0.0.0",
     "aws-cdk-lib": "2.91.0",
     "aws-cdk": "2.91.0",
-    "cdk-nag": "2.5.2"
+    "cdk-nag": "2.25.2"
   }
 }
