@@ -102,6 +102,7 @@ jsii - Apache-2.0
 jsii-pacmak - Apache-2.0
 lerna - MIT
 lint-staged - MIT
+minimatch - ISC
 monocle-ts - MIT
 mri - MIT
 newtype-ts - MIT
