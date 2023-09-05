@@ -11,7 +11,7 @@
  *  and limitations under the License.
  */
 
-import { GwlbConfig, VpcConfig, VpcTemplatesConfig } from '@aws-accelerator/config';
+import { ApplicationLoadBalancerConfig, GwlbConfig, VpcConfig, VpcTemplatesConfig } from '@aws-accelerator/config';
 import {
   ApplicationLoadBalancer,
   GatewayLoadBalancer,
@@ -232,6 +232,71 @@ export class LoadBalancerResources {
   }
 
   /**
+   * Validate subnet presence for given ALB
+   * @param subnetIds string[]
+   * @param albName string
+   */
+  private validateAlbSubnetId(subnetIds: string[], albName: string) {
+    if (subnetIds.length === 0) {
+      this.stack.addLogs(LogLevel.ERROR, `Could not find subnets for ALB Item ${albName}`);
+      throw new Error(`Configuration validation failed at runtime.`);
+    }
+  }
+
+  /**
+   * Function to create Application Load Balancer
+   * @param options
+   */
+  private createApplicationLoadBalancer(options: {
+    vpcName: string;
+    albItem: ApplicationLoadBalancerConfig;
+    accessLogsBucketName: string;
+    subnetIds: string[];
+    securityGroupIds: string[];
+    albMap: Map<string, ApplicationLoadBalancer>;
+    subnetMap: Map<string, Subnet>;
+    subnetLookups: (Subnet | undefined)[];
+    securityGroupLookups: (SecurityGroup | undefined)[];
+    props: AcceleratorStackProps;
+  }) {
+    const alb = new ApplicationLoadBalancer(this.stack, `${options.albItem.name}-${options.vpcName}`, {
+      name: options.albItem.name,
+      ssmPrefix: options.props.prefixes.ssmParamName,
+      subnets: options.subnetIds,
+      securityGroups: options.securityGroupIds ?? undefined,
+      scheme: options.albItem.scheme ?? 'internal',
+      accessLogsBucket: options.accessLogsBucketName,
+      attributes: options.albItem.attributes ?? undefined,
+    });
+    options.albMap.set(`${options.vpcName}_${options.albItem.name}`, alb);
+
+    for (const subnet of options.albItem.subnets || []) {
+      const subnetLookup = options.subnetMap.get(`${options.vpcName}_${subnet}`);
+      if (subnetLookup) {
+        alb.node.addDependency(subnetLookup);
+      }
+    }
+
+    for (const subnet of options.subnetLookups || []) {
+      if (subnet) {
+        alb.node.addDependency(subnet);
+      }
+    }
+
+    for (const securityGroup of options.securityGroupLookups || []) {
+      if (securityGroup) {
+        alb.node.addDependency(securityGroup);
+      }
+    }
+
+    this.stack.addSsmParameter({
+      logicalId: `${options.albItem.name}-${options.vpcName}-ssm`,
+      parameterName: this.stack.getSsmPath(SsmResourceType.ALB, [options.vpcName, options.albItem.name]),
+      stringValue: alb.applicationLoadBalancerArn,
+    });
+  }
+
+  /**
    * Create application load balancers
    * @param vpcResources
    * @param subnetMap
@@ -246,60 +311,93 @@ export class LoadBalancerResources {
     props: AcceleratorStackProps,
   ): Map<string, ApplicationLoadBalancer> {
     const albMap = new Map<string, ApplicationLoadBalancer>();
-    const accessLogsBucket = `${
+    const accessLogsBucketName = `${
       this.stack.acceleratorResourceNames.bucketPrefixes.elbLogs
     }-${props.accountsConfig.getLogArchiveAccountId()}-${cdk.Stack.of(this.stack).region}`;
 
     for (const vpcItem of vpcResources) {
       for (const albItem of vpcItem.loadBalancers?.applicationLoadBalancers || []) {
-        const subnetLookups = albItem.subnets.map(subnetName => subnetMap.get(`${vpcItem.name}_${subnetName}`));
-        const nonNullsubnets = subnetLookups.filter(subnet => subnet) as Subnet[];
-        const subnetIds = nonNullsubnets.map(subnet => subnet.subnetId);
-        const securityGroupLookups = albItem.securityGroups.map(securityGroupName =>
-          securityGroupMap.get(`${vpcItem.name}_${securityGroupName}`),
-        );
-        const nonNullSecurityGroups = securityGroupLookups.filter(group => group) as SecurityGroup[];
-        const securityGroupIds = nonNullSecurityGroups.map(securityGroup => securityGroup.securityGroupId);
-        if (subnetIds.length === 0) {
-          this.stack.addLogs(LogLevel.ERROR, `Could not find subnets for ALB Item ${albItem.name}`);
-          throw new Error(`Configuration validation failed at runtime.`);
-        }
-        const alb = new ApplicationLoadBalancer(this.stack, `${albItem.name}-${vpcItem.name}`, {
-          name: albItem.name,
-          subnets: subnetIds,
-          securityGroups: securityGroupIds ?? undefined,
-          scheme: albItem.scheme ?? 'internal',
-          accessLogsBucket,
-          attributes: albItem.attributes ?? undefined,
-        });
-        albMap.set(`${vpcItem.name}_${albItem.name}`, alb);
+        // Logic to only create Application Load Balancers that don't include the shareTargets property
+        if (!albItem.shareTargets) {
+          const subnetLookups = albItem.subnets.map(subnetName => subnetMap.get(`${vpcItem.name}_${subnetName}`));
+          const nonNullsubnets = subnetLookups.filter(subnet => subnet) as Subnet[];
+          const subnetIds = nonNullsubnets.map(subnet => subnet.subnetId);
+          const securityGroupLookups = albItem.securityGroups.map(securityGroupName =>
+            securityGroupMap.get(`${vpcItem.name}_${securityGroupName}`),
+          );
+          const nonNullSecurityGroups = securityGroupLookups.filter(group => group) as SecurityGroup[];
+          const securityGroupIds = nonNullSecurityGroups.map(securityGroup => securityGroup.securityGroupId);
 
-        for (const subnet of albItem.subnets || []) {
-          const subnetLookup = subnetMap.get(`${vpcItem.name}_${subnet}`);
-          if (subnetLookup) {
-            alb.node.addDependency(subnetLookup);
-          }
-        }
-        for (const subnet of subnetLookups || []) {
-          if (subnet) {
-            alb.node.addDependency(subnet);
-          }
-        }
+          this.validateAlbSubnetId(subnetIds, albItem.name);
 
-        for (const securityGroup of securityGroupLookups || []) {
-          if (securityGroup) {
-            alb.node.addDependency(securityGroup);
-          }
+          // Create application load balancer
+          this.createApplicationLoadBalancer({
+            vpcName: vpcItem.name,
+            albItem,
+            accessLogsBucketName,
+            subnetIds,
+            securityGroupIds,
+            albMap,
+            subnetMap,
+            subnetLookups,
+            securityGroupLookups,
+            props,
+          });
         }
-
-        this.stack.addSsmParameter({
-          logicalId: `${albItem.name}-${vpcItem.name}-ssm`,
-          parameterName: this.stack.getSsmPath(SsmResourceType.ALB, [vpcItem.name, albItem.name]),
-          stringValue: alb.applicationLoadBalancerArn,
-        });
       }
     }
     return albMap;
+  }
+
+  /**
+   * Function to create Network Load Balancer
+   * @param vpcItem {@link VpcConfig} | {@link VpcTemplatesConfig}
+   * @param accessLogsBucketName string
+   * @param nlbMap Map<string, {@link NetworkLoadBalancer}>
+   * @param Map<string, {@link Subnet}>
+   * @param props {@link AcceleratorStackProps}
+   */
+  private createNetworkLoadBalancer(
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    accessLogsBucketName: string,
+    nlbMap: Map<string, NetworkLoadBalancer>,
+    subnetMap: Map<string, Subnet>,
+    props: AcceleratorStackProps,
+  ) {
+    for (const nlbItem of vpcItem.loadBalancers?.networkLoadBalancers || []) {
+      const subnetLookups = nlbItem.subnets.map(subnetName => subnetMap.get(`${vpcItem.name}_${subnetName}`));
+      const nonNullsubnets = subnetLookups.filter(subnet => subnet) as Subnet[];
+      const subnetIds = nonNullsubnets.map(subnet => subnet.subnetId);
+      if (subnetIds.length === 0) {
+        this.stack.addLogs(LogLevel.ERROR, `Could not find subnets for NLB Item ${nlbItem.name}`);
+        throw new Error(`Configuration validation failed at runtime.`);
+      }
+      const nlb = new NetworkLoadBalancer(this.stack, `${nlbItem.name}-${vpcItem.name}`, {
+        name: nlbItem.name,
+        ssmPrefix: props.prefixes.ssmParamName,
+        appName: `${nlbItem.name}-${vpcItem.name}-app`,
+        subnets: subnetIds,
+        vpcName: vpcItem.name,
+        scheme: nlbItem.scheme,
+        deletionProtection: nlbItem.deletionProtection,
+        crossZoneLoadBalancing: nlbItem.crossZoneLoadBalancing,
+        accessLogsBucket: accessLogsBucketName,
+      });
+      nlbMap.set(`${vpcItem.name}_${nlbItem.name}`, nlb);
+
+      for (const subnet of nlbItem.subnets || []) {
+        const subnetLookup = subnetMap.get(`${vpcItem.name}_${subnet}`);
+        if (subnetLookup) {
+          nlb.node.addDependency(subnetLookup);
+        }
+      }
+
+      this.stack.addSsmParameter({
+        logicalId: `${nlbItem.name}-${vpcItem.name}-ssm`,
+        parameterName: this.stack.getSsmPath(SsmResourceType.NLB, [vpcItem.name, nlbItem.name]),
+        stringValue: nlb.networkLoadBalancerArn,
+      });
+    }
   }
 
   /**
@@ -316,7 +414,7 @@ export class LoadBalancerResources {
   ) {
     const nlbMap = new Map<string, NetworkLoadBalancer>();
 
-    const accessLogsBucket = `${
+    const accessLogsBucketName = `${
       this.stack.acceleratorResourceNames.bucketPrefixes.elbLogs
     }-${props.accountsConfig.getLogArchiveAccountId()}-${cdk.Stack.of(this.stack).region}`;
 
@@ -324,39 +422,7 @@ export class LoadBalancerResources {
       // Set account IDs
       const principals = this.setNlbPrincipalIds(vpcItem, props);
 
-      for (const nlbItem of vpcItem.loadBalancers?.networkLoadBalancers || []) {
-        const subnetLookups = nlbItem.subnets.map(subnetName => subnetMap.get(`${vpcItem.name}_${subnetName}`));
-        const nonNullsubnets = subnetLookups.filter(subnet => subnet) as Subnet[];
-        const subnetIds = nonNullsubnets.map(subnet => subnet.subnetId);
-        if (subnetIds.length === 0) {
-          this.stack.addLogs(LogLevel.ERROR, `Could not find subnets for NLB Item ${nlbItem.name}`);
-          throw new Error(`Configuration validation failed at runtime.`);
-        }
-        const nlb = new NetworkLoadBalancer(this.stack, `${nlbItem.name}-${vpcItem.name}`, {
-          name: nlbItem.name,
-          appName: `${nlbItem.name}-${vpcItem.name}-app`,
-          subnets: subnetIds,
-          vpcName: vpcItem.name,
-          scheme: nlbItem.scheme,
-          deletionProtection: nlbItem.deletionProtection,
-          crossZoneLoadBalancing: nlbItem.crossZoneLoadBalancing,
-          accessLogsBucket,
-        });
-        nlbMap.set(`${vpcItem.name}_${nlbItem.name}`, nlb);
-
-        for (const subnet of nlbItem.subnets || []) {
-          const subnetLookup = subnetMap.get(`${vpcItem.name}_${subnet}`);
-          if (subnetLookup) {
-            nlb.node.addDependency(subnetLookup);
-          }
-        }
-
-        this.stack.addSsmParameter({
-          logicalId: `${nlbItem.name}-${vpcItem.name}-ssm`,
-          parameterName: this.stack.getSsmPath(SsmResourceType.NLB, [vpcItem.name, nlbItem.name]),
-          stringValue: nlb.networkLoadBalancerArn,
-        });
-      }
+      this.createNetworkLoadBalancer(vpcItem, accessLogsBucketName, nlbMap, subnetMap, props);
 
       if (
         cdk.Stack.of(this.stack).region === props.globalConfig.homeRegion &&

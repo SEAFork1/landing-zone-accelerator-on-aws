@@ -25,6 +25,7 @@ export interface LoadAcceleratorConfigTableProps {
   readonly configS3Bucket: string;
   readonly organizationsConfigS3Key: string;
   readonly accountConfigS3Key: string;
+  readonly replacementsConfigS3Key?: string;
   readonly commitId: string;
   readonly partition: string;
   readonly managementAccountId: string;
@@ -42,6 +43,10 @@ export interface LoadAcceleratorConfigTableProps {
    * Boolean for single account mode (i.e. AWS Jam or Workshop)
    */
   readonly enableSingleAccountMode: boolean;
+  /**
+   * Boolean for organization
+   */
+  readonly isOrgsEnabled: boolean;
 }
 
 /**
@@ -79,6 +84,12 @@ export class LoadAcceleratorConfigTable extends Construct {
             'organizations:ListRoots',
             'organizations:ListOrganizationalUnitsForParent',
           ],
+          Resource: '*',
+        },
+        {
+          Sid: 'getReplacements',
+          Effect: 'Allow',
+          Action: ['ssm:GetParameter'],
           Resource: '*',
         },
         {
@@ -131,10 +142,12 @@ export class LoadAcceleratorConfigTable extends Construct {
         configS3Bucket: props.configS3Bucket,
         organizationsConfigS3Key: props.organizationsConfigS3Key,
         accountConfigS3Key: props.accountConfigS3Key,
+        replacementsConfigS3Key: props.replacementsConfigS3Key,
         commitId: props.commitId,
         partition: props.partition,
         stackName: props.stackName,
         uuid: uuidv4(), // Generates a new UUID to force the resource to update
+        isOrgsEnabled: props.isOrgsEnabled,
       },
     });
 

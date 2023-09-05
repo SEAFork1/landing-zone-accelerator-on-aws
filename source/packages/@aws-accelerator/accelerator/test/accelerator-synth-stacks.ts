@@ -36,7 +36,7 @@ import { ApplicationsStack } from '../lib/stacks/applications-stack';
 import { BootstrapStack } from '../lib/stacks/bootstrap-stack';
 import { CustomStack, generateCustomStackMappings, isIncluded } from '../lib/stacks/custom-stack';
 import { CustomizationsStack } from '../lib/stacks/customizations-stack';
-import { DependenciesStack } from '../lib/stacks/dependencies-stack';
+import { DependenciesStack } from '../lib/stacks/dependencies-stack/dependencies-stack';
 import { FinalizeStack } from '../lib/stacks/finalize-stack';
 import { KeyStack } from '../lib/stacks/key-stack';
 import { LoggingStack } from '../lib/stacks/logging-stack';
@@ -68,8 +68,8 @@ export class AcceleratorSynthStacks {
   private readonly globalRegion: string;
 
   public readonly stacks = new Map<string, AcceleratorStack | CustomStack | Stack>();
-  constructor(stageName: string, configFolderName: string, partition: string, globalRegion: string) {
-    this.configFolderName = configFolderName;
+  constructor(stageName: string, partition: string, globalRegion: string, configFolderName?: string) {
+    this.configFolderName = configFolderName ?? 'snapshot-only';
     this.partition = partition;
     this.stageName = stageName;
     this.globalRegion = globalRegion;
@@ -112,6 +112,7 @@ export class AcceleratorSynthStacks {
         kmsAlias: 'alias/accelerator',
         bucketName: 'aws-accelerator',
         ssmParamName: '/accelerator',
+        importResourcesSsmParamName: '/accelerator/imported-resources',
         snsTopicName: 'aws-accelerator',
         repoName: 'aws-accelerator',
         secretName: '/accelerator',
@@ -119,6 +120,7 @@ export class AcceleratorSynthStacks {
         databaseName: 'aws-accelerator',
       },
       enableSingleAccountMode: false,
+      useExistingRoles: false,
     };
 
     this.homeRegion = this.props.globalConfig.homeRegion;

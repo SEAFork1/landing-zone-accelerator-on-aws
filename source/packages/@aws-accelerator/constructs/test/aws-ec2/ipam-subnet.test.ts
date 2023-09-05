@@ -24,6 +24,7 @@ const stack = new cdk.Stack();
 new IpamSubnet(stack, 'TestIpamSubnet', {
   name: 'Test',
   availabilityZone: 'us-east-1a',
+  availabilityZoneId: undefined,
   basePool: ['10.0.0.0/8'],
   ipamAllocation: {
     ipamPoolName: 'test-pool',
@@ -33,6 +34,30 @@ new IpamSubnet(stack, 'TestIpamSubnet', {
   logRetentionInDays: 3653,
   vpcId: 'vpc-test',
   tags: [{ key: 'key', value: 'value' }],
+});
+
+new IpamSubnet(stack, 'TestIpamSubnet2', {
+  name: 'Test2',
+  availabilityZone: undefined,
+  availabilityZoneId: 'use1-az2',
+  basePool: ['10.0.0.0/8'],
+  ipamAllocation: {
+    ipamPoolName: 'test-pool',
+    netmaskLength: 24,
+  },
+  kmsKey: new cdk.aws_kms.Key(stack, 'Key2', {}),
+  logRetentionInDays: 3653,
+  vpcId: 'vpc-test',
+  tags: [{ key: 'key', value: 'value' }],
+});
+
+IpamSubnet.fromLookup(stack, 'TestIpamSubnetFromLookup', {
+  owningAccountId: '11111111111',
+  ssmSubnetIdPath: '/path/to/ipam/subnet',
+  roleName: 'testRole',
+  region: 'us-east-1',
+  kmsKey: new cdk.aws_kms.Key(stack, 'KeyForLookup', {}),
+  logRetentionInDays: 3653,
 });
 
 /**

@@ -58,7 +58,6 @@ export async function loadOrganizationalUnits(
       id: rootId,
     });
   }
-
   const level0 = await getChildrenForParent(rootId!, undefined, client);
   const level1 = await processLevel(level0, client);
   const level2 = await processLevel(level1, client);

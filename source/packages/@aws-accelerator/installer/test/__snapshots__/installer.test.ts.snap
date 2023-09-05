@@ -217,7 +217,7 @@ exports[`InstallerStack Stack(installer):  Snapshot Test 1`] = `
     "RepositoryBranchName": {
       "AllowedPattern": ".+",
       "ConstraintDescription": "The repository branch name must not be empty",
-      "Default": "release/v1.4.3",
+      "Default": "release/v1.4.1",
       "Description": "The name of the git branch to use for installation. To determine the branch name, navigate to the Landing Zone Accelerator GitHub branches page and choose the release branch you would like to deploy. Release branch names will align with the semantic versioning of our GitHub releases. New release branches will be available as the open source project is updated with new features.",
       "Type": "String",
     },
@@ -1771,7 +1771,6 @@ phases:
                           yarn config set registry https://registry.npmmirror.com
                        fi
       - yarn install
-      - yarn lerna link
       - yarn build
       - cd packages/@aws-accelerator/installer
       - if [ "$BOOTSTRAPPED_HOME" = "no" ]; then yarn run cdk bootstrap --toolkitStackName ",
@@ -1884,6 +1883,16 @@ phases:
                           unset AWS_SESSION_TOKEN;
                        fi
       - cd ../accelerator
+      - |-
+        aws ssm get-parameter --name /accelerator/migration --query "Parameter.Value" 2> /dev/null
+                          status=$?
+                          if [ $status -ne 0 ]; then
+                            echo "No SSM Parameter found, setting ENABLE_ASEA_MIGRATION to false";
+                            export ENABLE_ASEA_MIGRATION=false
+                          else
+                            echo "SSM Parameter Found, setting ENABLE_ASEA_MIGRATION to true"
+                            export ENABLE_ASEA_MIGRATION=true
+                          fi;
       - yarn run ts-node --transpile-only cdk.ts deploy --require-approval never --stage pipeline --account ",
                 {
                   "Ref": "AWS::AccountId",
@@ -2707,7 +2716,7 @@ phases:
           ],
         },
         "Type": "String",
-        "Value": "1.4.3",
+        "Value": "1.4.1",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -3582,7 +3591,7 @@ exports[`InstallerStack Stack(installer):  Snapshot Test 2`] = `
     "RepositoryBranchName": {
       "AllowedPattern": ".+",
       "ConstraintDescription": "The repository branch name must not be empty",
-      "Default": "release/v1.4.3",
+      "Default": "release/v1.4.1",
       "Description": "The name of the git branch to use for installation. To determine the branch name, navigate to the Landing Zone Accelerator GitHub branches page and choose the release branch you would like to deploy. Release branch names will align with the semantic versioning of our GitHub releases. New release branches will be available as the open source project is updated with new features.",
       "Type": "String",
     },
@@ -5126,7 +5135,6 @@ phases:
                           yarn config set registry https://registry.npmmirror.com
                        fi
       - yarn install
-      - yarn lerna link
       - yarn build
       - cd packages/@aws-accelerator/installer
       - if [ "$BOOTSTRAPPED_HOME" = "no" ]; then yarn run cdk bootstrap --toolkitStackName ",
@@ -5239,6 +5247,16 @@ phases:
                           unset AWS_SESSION_TOKEN;
                        fi
       - cd ../accelerator
+      - |-
+        aws ssm get-parameter --name /accelerator/migration --query "Parameter.Value" 2> /dev/null
+                          status=$?
+                          if [ $status -ne 0 ]; then
+                            echo "No SSM Parameter found, setting ENABLE_ASEA_MIGRATION to false";
+                            export ENABLE_ASEA_MIGRATION=false
+                          else
+                            echo "SSM Parameter Found, setting ENABLE_ASEA_MIGRATION to true"
+                            export ENABLE_ASEA_MIGRATION=true
+                          fi;
       - yarn run ts-node --transpile-only cdk.ts deploy --require-approval never --stage pipeline --account ",
                 {
                   "Ref": "AWS::AccountId",
@@ -6062,7 +6080,7 @@ phases:
           ],
         },
         "Type": "String",
-        "Value": "1.4.3",
+        "Value": "1.4.1",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -6969,7 +6987,7 @@ exports[`InstallerStack Stack(installer):  Snapshot Test 3`] = `
     "RepositoryBranchName": {
       "AllowedPattern": ".+",
       "ConstraintDescription": "The repository branch name must not be empty",
-      "Default": "release/v1.4.3",
+      "Default": "release/v1.4.1",
       "Description": "The name of the git branch to use for installation. To determine the branch name, navigate to the Landing Zone Accelerator GitHub branches page and choose the release branch you would like to deploy. Release branch names will align with the semantic versioning of our GitHub releases. New release branches will be available as the open source project is updated with new features.",
       "Type": "String",
     },
@@ -8517,7 +8535,6 @@ phases:
                           yarn config set registry https://registry.npmmirror.com
                        fi
       - yarn install
-      - yarn lerna link
       - yarn build
       - cd packages/@aws-accelerator/installer
       - if [ "$BOOTSTRAPPED_HOME" = "no" ]; then yarn run cdk bootstrap --toolkitStackName ",
@@ -8630,6 +8647,16 @@ phases:
                           unset AWS_SESSION_TOKEN;
                        fi
       - cd ../accelerator
+      - |-
+        aws ssm get-parameter --name /accelerator/migration --query "Parameter.Value" 2> /dev/null
+                          status=$?
+                          if [ $status -ne 0 ]; then
+                            echo "No SSM Parameter found, setting ENABLE_ASEA_MIGRATION to false";
+                            export ENABLE_ASEA_MIGRATION=false
+                          else
+                            echo "SSM Parameter Found, setting ENABLE_ASEA_MIGRATION to true"
+                            export ENABLE_ASEA_MIGRATION=true
+                          fi;
       - yarn run ts-node --transpile-only cdk.ts deploy --require-approval never --stage pipeline --account ",
                 {
                   "Ref": "AWS::AccountId",
@@ -9458,7 +9485,7 @@ phases:
           ],
         },
         "Type": "String",
-        "Value": "1.4.3",
+        "Value": "1.4.1",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -10347,7 +10374,7 @@ exports[`InstallerStack Stack(installer):  Snapshot Test 4`] = `
     "RepositoryBranchName": {
       "AllowedPattern": ".+",
       "ConstraintDescription": "The repository branch name must not be empty",
-      "Default": "release/v1.4.3",
+      "Default": "release/v1.4.1",
       "Description": "The name of the git branch to use for installation. To determine the branch name, navigate to the Landing Zone Accelerator GitHub branches page and choose the release branch you would like to deploy. Release branch names will align with the semantic versioning of our GitHub releases. New release branches will be available as the open source project is updated with new features.",
       "Type": "String",
     },
@@ -11885,7 +11912,6 @@ phases:
                           yarn config set registry https://registry.npmmirror.com
                        fi
       - yarn install
-      - yarn lerna link
       - yarn build
       - cd packages/@aws-accelerator/installer
       - if [ "$BOOTSTRAPPED_HOME" = "no" ]; then yarn run cdk bootstrap --toolkitStackName ",
@@ -11998,6 +12024,16 @@ phases:
                           unset AWS_SESSION_TOKEN;
                        fi
       - cd ../accelerator
+      - |-
+        aws ssm get-parameter --name /accelerator/migration --query "Parameter.Value" 2> /dev/null
+                          status=$?
+                          if [ $status -ne 0 ]; then
+                            echo "No SSM Parameter found, setting ENABLE_ASEA_MIGRATION to false";
+                            export ENABLE_ASEA_MIGRATION=false
+                          else
+                            echo "SSM Parameter Found, setting ENABLE_ASEA_MIGRATION to true"
+                            export ENABLE_ASEA_MIGRATION=true
+                          fi;
       - yarn run ts-node --transpile-only cdk.ts deploy --require-approval never --stage pipeline --account ",
                 {
                   "Ref": "AWS::AccountId",
@@ -12826,7 +12862,7 @@ phases:
           ],
         },
         "Type": "String",
-        "Value": "1.4.3",
+        "Value": "1.4.1",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -13715,7 +13751,7 @@ exports[`InstallerStack Stack(installer):  Snapshot Test 5`] = `
     "RepositoryBranchName": {
       "AllowedPattern": ".+",
       "ConstraintDescription": "The repository branch name must not be empty",
-      "Default": "release/v1.4.3",
+      "Default": "release/v1.4.1",
       "Description": "The name of the git branch to use for installation. To determine the branch name, navigate to the Landing Zone Accelerator GitHub branches page and choose the release branch you would like to deploy. Release branch names will align with the semantic versioning of our GitHub releases. New release branches will be available as the open source project is updated with new features.",
       "Type": "String",
     },
@@ -15258,7 +15294,6 @@ phases:
                           yarn config set registry https://registry.npmmirror.com
                        fi
       - yarn install
-      - yarn lerna link
       - yarn build
       - cd packages/@aws-accelerator/installer
       - if [ "$BOOTSTRAPPED_HOME" = "no" ]; then yarn run cdk bootstrap --toolkitStackName ",
@@ -15371,6 +15406,16 @@ phases:
                           unset AWS_SESSION_TOKEN;
                        fi
       - cd ../accelerator
+      - |-
+        aws ssm get-parameter --name /accelerator/migration --query "Parameter.Value" 2> /dev/null
+                          status=$?
+                          if [ $status -ne 0 ]; then
+                            echo "No SSM Parameter found, setting ENABLE_ASEA_MIGRATION to false";
+                            export ENABLE_ASEA_MIGRATION=false
+                          else
+                            echo "SSM Parameter Found, setting ENABLE_ASEA_MIGRATION to true"
+                            export ENABLE_ASEA_MIGRATION=true
+                          fi;
       - yarn run ts-node --transpile-only cdk.ts deploy --require-approval never --stage pipeline --account ",
                 {
                   "Ref": "AWS::AccountId",
@@ -16199,7 +16244,7 @@ phases:
           ],
         },
         "Type": "String",
-        "Value": "1.4.3",
+        "Value": "1.4.1",
       },
       "Type": "AWS::SSM::Parameter",
     },

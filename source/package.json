@@ -1,6 +1,6 @@
 {
   "name": "landing-zone-accelerator-on-aws",
-  "version": "1.4.3",
+  "version": "1.4.1",
   "description": "Landing Zone Accelerator on AWS",
   "license": "Apache-2.0",
   "author": {
@@ -20,7 +20,7 @@
     "@types/node": "18.14.0",
     "@typescript-eslint/eslint-plugin": "5.53.0",
     "@typescript-eslint/parser": "5.53.0",
-    "aws-cdk-lib": "2.79.1",
+    "aws-cdk-lib": "2.93.0",
     "constructs": "10.0.12",
     "esbuild": "0.17.10",
     "eslint": "8.34.0",
@@ -30,7 +30,7 @@
     "husky-init": "8.0.0",
     "jest": "29.4.3",
     "jest-junit": "15.0.0",
-    "lerna": "6.5.1",
+    "lerna": "7.2.0",
     "prettier": "2.8.4",
     "ts-jest": "29.0.5",
     "ts-node": "10.9.1",
@@ -41,15 +41,17 @@
     "cleanup": "lerna run cleanup --stream && rm -rf node_modules",
     "cleanup:tsc": "lerna run cleanup:tsc --stream",
     "build": "lerna run build --stream",
-    "validate-config": "ts-node $PWD/packages/@aws-accelerator/accelerator/lib/config-validator.ts",
+    "validate-config": "ts-node ./packages/@aws-accelerator/accelerator/lib/config-validator.ts",
     "test": "lerna run test --stream",
     "test:clean": "rm -f ./test-reports/*.xml",
     "docs": "yarn run typedoc --entryPointStrategy packages './packages/@aws-accelerator/*' './packages/@aws-cdk-extensions/*' --name 'Landing Zone Accelerator on AWS' --includeVersion --disableSources --logLevel Verbose",
+    "generate-all-docs": "../deployment/build-docs.sh",
     "viper-scan": "cd .. && aws s3 cp s3://viperlight-scanner/latest/viperlight.zip . && unzip -qo viperlight.zip -d ../viperlight && rm -r ./viperlight.zip && ../viperlight/bin/viperlight scan",
     "prepare": "cd ../ && husky install source/.husky",
     "postinstall": "cd ../ && husky install source/.husky && cd source",
     "lint": "lerna run lint --stream",
-    "prettier": "lerna run prettier --stream"
+    "prettier": "lerna run prettier --stream",
+    "update-snapshots": "../deployment/update-snapshots.sh"
   },
   "workspaces": {
     "packages": [

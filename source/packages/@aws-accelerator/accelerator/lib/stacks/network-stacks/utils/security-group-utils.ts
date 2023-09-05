@@ -587,6 +587,65 @@ function processTypeSources(
 }
 
 /**
+ * Function to prepare Security group rule properties
+ * @param vpcResources {@link VpcConfig} | {@link VpcTemplatesConfig}
+ * @param source string | {@link SecurityGroupSourceConfig} | {@link PrefixListSourceConfig} | {@link SubnetSourceConfig}
+ * @param rules {@link SecurityGroupRuleProps}[]
+ * @param props
+ * @param prefixListMap
+ * @param subnetMap
+ * @param securityGroupMap
+ * @param vpcName
+ */
+function prepareSecurityGroupRuleProps(
+  vpcResources: (VpcConfig | VpcTemplatesConfig)[],
+  source: string | SecurityGroupSourceConfig | PrefixListSourceConfig | SubnetSourceConfig,
+  rules: SecurityGroupRuleProps[],
+  props: {
+    ipProtocol: string;
+    fromPort?: number;
+    toPort?: number;
+    description?: string;
+  },
+  maps: {
+    prefixLists: Map<string, PrefixList> | Map<string, string>;
+    subnets: Map<string, Subnet> | Map<string, IIpamSubnet>;
+    securityGroups?: Map<string, SecurityGroup>;
+  },
+
+  vpcName?: string,
+) {
+  // Conditional to only process non-security group sources
+  if (!maps.securityGroups) {
+    //
+    // IP source
+    //
+    if (nonEmptyString.is(source)) {
+      rules.push(processIpSource(source, props));
+    }
+    //
+    // Subnet source
+    //
+    if (NetworkConfigTypes.subnetSourceConfig.is(source)) {
+      rules.push(...processSubnetSource(vpcResources, maps.subnets, source, props));
+    }
+    //
+    // Prefix List Source
+    //
+    if (NetworkConfigTypes.prefixListSourceConfig.is(source)) {
+      rules.push(...processPrefixListSource(maps.prefixLists, source, props));
+    }
+  } else {
+    //
+    // Security Group Source
+    //
+    if (NetworkConfigTypes.securityGroupSourceConfig.is(source) && vpcName) {
+      rules.push(...processSecurityGroupSource(maps.securityGroups, vpcName, source, props));
+    }
+  }
+}
+
+/**
  * Processes individual security group source references.
  * @param vpcResources
  * @param sources
@@ -613,34 +672,14 @@ function processSecurityGroupRuleSources(
   const rules: SecurityGroupRuleProps[] = [];
 
   for (const source of sources ?? []) {
-    // Conditional to only process non-security group sources
-    if (!securityGroupMap) {
-      //
-      // IP source
-      //
-      if (nonEmptyString.is(source)) {
-        rules.push(processIpSource(source, props));
-      }
-      //
-      // Subnet source
-      //
-      if (NetworkConfigTypes.subnetSourceConfig.is(source)) {
-        rules.push(...processSubnetSource(vpcResources, subnetMap, source, props));
-      }
-      //
-      // Prefix List Source
-      //
-      if (NetworkConfigTypes.prefixListSourceConfig.is(source)) {
-        rules.push(...processPrefixListSource(prefixListMap, source, props));
-      }
-    } else {
-      //
-      // Security Group Source
-      //
-      if (NetworkConfigTypes.securityGroupSourceConfig.is(source) && vpcName) {
-        rules.push(...processSecurityGroupSource(securityGroupMap, vpcName, source, props));
-      }
-    }
+    prepareSecurityGroupRuleProps(
+      vpcResources,
+      source,
+      rules,
+      props,
+      { prefixLists: prefixListMap, subnets: subnetMap, securityGroups: securityGroupMap },
+      vpcName,
+    );
   }
   return rules;
 }

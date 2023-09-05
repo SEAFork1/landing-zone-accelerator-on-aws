@@ -218,6 +218,24 @@ exports[`OperationsStack Construct(OperationsStack):  Snapshot Test 1`] = `
                 "Service": "backup.amazonaws.com",
               },
             },
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition",
+                      },
+                      ":iam::123456789012:root",
+                    ],
+                  ],
+                },
+              },
+            },
           ],
           "Version": "2012-10-17",
         },
@@ -255,6 +273,37 @@ exports[`OperationsStack Construct(OperationsStack):  Snapshot Test 1`] = `
       "DeletionPolicy": "Retain",
       "Properties": {
         "BackupVaultName": "BackupVault",
+        "EncryptionKeyArn": {
+          "Fn::GetAtt": [
+            "BackupKey60B97760",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::Backup::BackupVault",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "BackupVaultInfrastructureVault94AE1FE1": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "AccessPolicy": {
+          "Statement": [
+            {
+              "Action": "backup:DeleteRecoveryPoint",
+              "Condition": {
+                "Bool": {
+                  "aws:MultiFactorAuthPresent": "false",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": "*",
+              "Resource": "*",
+              "Sid": "DenyDeleteRecoveryPoint",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "BackupVaultName": "InfrastructureVault",
         "EncryptionKeyArn": {
           "Fn::GetAtt": [
             "BackupKey60B97760",
@@ -694,134 +743,6 @@ exports[`OperationsStack Construct(OperationsStack):  Snapshot Test 1`] = `
       },
       "Type": "AWS::IAM::InstanceProfile",
     },
-    "LzaManagedPolicy01FDAB5303": {
-      "Metadata": {
-        "cdk_nag": {
-          "rules_to_suppress": [
-            {
-              "id": "AwsSolutions-IAM5",
-              "reason": "Policies definition are derived from accelerator iam-config boundary-policy file",
-            },
-          ],
-        },
-      },
-      "Properties": {
-        "Description": "",
-        "ManagedPolicyName": "lzaManagedPolicy01",
-        "Path": "/",
-        "PolicyDocument": {
-          "Statement": [
-            {
-              "Action": [
-                "s3:CreateBucket",
-                "s3:PutBucketPolicy",
-              ],
-              "Effect": "Allow",
-              "Resource": "arn:aws:s3:::rcc-bucket-trustedservice-do-not-delete-*",
-            },
-            {
-              "Action": "s3:ListAllMyBuckets",
-              "Effect": "Allow",
-              "Resource": "arn:aws:s3:::*",
-            },
-            {
-              "Action": [
-                "config:DescribeConfigurationRecorders",
-                "config:DescribeConfigurationRecorderStatus",
-                "config:PutConfigurationRecorder",
-                "config:StartConfigurationRecorder",
-                "config:DescribeDeliveryChannels",
-                "config:DescribeDeliveryChannelStatus",
-                "config:PutDeliveryChannel",
-                "config:DescribeAggregationAuthorizations",
-                "config:PutAggregationAuthorization",
-                "config:ListDiscoveredResources",
-                "config:BatchGetResourceConfig",
-              ],
-              "Effect": "Allow",
-              "Resource": "*",
-            },
-            {
-              "Action": [
-                "iam:GetRole",
-                "iam:PassRole",
-                "iam:CreateServiceLinkedRole",
-                "iam:DeleteServiceLinkedRole",
-                "iam:GetServiceLinkedRoleDeletionStatus",
-              ],
-              "Effect": "Allow",
-              "Resource": "arn:aws:iam::*:role/aws-service-role/config.amazonaws.com/*",
-            },
-          ],
-          "Version": "2012-10-17",
-        },
-      },
-      "Type": "AWS::IAM::ManagedPolicy",
-    },
-    "LzaManagedPolicy027214A961": {
-      "Metadata": {
-        "cdk_nag": {
-          "rules_to_suppress": [
-            {
-              "id": "AwsSolutions-IAM5",
-              "reason": "Policies definition are derived from accelerator iam-config boundary-policy file",
-            },
-          ],
-        },
-      },
-      "Properties": {
-        "Description": "",
-        "ManagedPolicyName": "lzaManagedPolicy02",
-        "Path": "/",
-        "PolicyDocument": {
-          "Statement": [
-            {
-              "Action": [
-                "s3:CreateBucket",
-                "s3:PutBucketPolicy",
-              ],
-              "Effect": "Allow",
-              "Resource": "arn:aws:s3:::rcc-bucket-trustedservice-do-not-delete-*",
-            },
-            {
-              "Action": "s3:ListAllMyBuckets",
-              "Effect": "Allow",
-              "Resource": "arn:aws:s3:::*",
-            },
-            {
-              "Action": [
-                "config:DescribeConfigurationRecorders",
-                "config:DescribeConfigurationRecorderStatus",
-                "config:PutConfigurationRecorder",
-                "config:StartConfigurationRecorder",
-                "config:DescribeDeliveryChannels",
-                "config:DescribeDeliveryChannelStatus",
-                "config:PutDeliveryChannel",
-                "config:DescribeAggregationAuthorizations",
-                "config:PutAggregationAuthorization",
-                "config:ListDiscoveredResources",
-                "config:BatchGetResourceConfig",
-              ],
-              "Effect": "Allow",
-              "Resource": "*",
-            },
-            {
-              "Action": [
-                "iam:GetRole",
-                "iam:PassRole",
-                "iam:CreateServiceLinkedRole",
-                "iam:DeleteServiceLinkedRole",
-                "iam:GetServiceLinkedRoleDeletionStatus",
-              ],
-              "Effect": "Allow",
-              "Resource": "arn:aws:iam::*:role/aws-service-role/config.amazonaws.com/*",
-            },
-          ],
-          "Version": "2012-10-17",
-        },
-      },
-      "Type": "AWS::IAM::ManagedPolicy",
-    },
     "ServiceCatalogPropagationRole17EC5FCF": {
       "Metadata": {
         "cdk_nag": {
@@ -921,7 +842,85 @@ exports[`OperationsStack Construct(OperationsStack):  Snapshot Test 1`] = `
       "Properties": {
         "Name": "/accelerator/AWSAccelerator-OperationsStack-111111111111-us-east-1/version",
         "Type": "String",
-        "Value": "1.4.3",
+        "Value": "1.4.1",
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamAdministratorsGroupArn1018D83B": {
+      "Properties": {
+        "Name": "/accelerator/iam/group/Administrators/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "AdministratorsA37EF73A",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamBackupRoleRoleArn575A5734": {
+      "Properties": {
+        "Name": "/accelerator/iam/role/Backup-Role/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "BackupRoleF43CFD90",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamBreakGlassUser01UserArn935D8C01": {
+      "Properties": {
+        "Name": "/accelerator/iam/user/breakGlassUser01/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "BreakGlassUser01AA051328",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamBreakGlassUser02UserArnB4B8C9E3": {
+      "DependsOn": [
+        "SsmParamBreakGlassUser01UserArn935D8C01",
+      ],
+      "Properties": {
+        "Name": "/accelerator/iam/user/breakGlassUser02/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "BreakGlassUser02DFF444C8",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamDefaultBoundaryPolicyPolicyArnD6B0A5E8": {
+      "Properties": {
+        "Name": "/accelerator/iam/policy/Default-Boundary-Policy/arn",
+        "Type": "String",
+        "Value": {
+          "Ref": "DefaultBoundaryPolicy489A8D26",
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamEc2DefaultSsmAdRoleRoleArnEA559EEC": {
+      "Properties": {
+        "Name": "/accelerator/iam/role/EC2-Default-SSM-AD-Role/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "Ec2DefaultSsmAdRoleADFFA4C6",
+            "Arn",
+          ],
+        },
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -932,6 +931,22 @@ exports[`OperationsStack Construct(OperationsStack):  Snapshot Test 1`] = `
         "Value": {
           "Ref": "AWS::StackId",
         },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParameterParameterTest8FE0D600": {
+      "Properties": {
+        "Name": "/my/parameter/structure",
+        "Type": "String",
+        "Value": "parameterTestValue",
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParameterSomeOtherName594B7F4C": {
+      "Properties": {
+        "Name": "/my/account/structure",
+        "Type": "String",
+        "Value": "someOtherValue",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -1929,7 +1944,85 @@ exports[`delegatedAdminStack Construct(OperationsStack):  Snapshot Test 1`] = `
       "Properties": {
         "Name": "/accelerator/AWSAccelerator-OperationsStack-111111111111-us-east-1/version",
         "Type": "String",
-        "Value": "1.4.3",
+        "Value": "1.4.1",
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamAdministratorsGroupArn1018D83B": {
+      "Properties": {
+        "Name": "/accelerator/iam/group/Administrators/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "AdministratorsA37EF73A",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamBackupRoleRoleArn575A5734": {
+      "Properties": {
+        "Name": "/accelerator/iam/role/Backup-Role/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "BackupRoleF43CFD90",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamBreakGlassUser01UserArn935D8C01": {
+      "Properties": {
+        "Name": "/accelerator/iam/user/breakGlassUser01/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "BreakGlassUser01AA051328",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamBreakGlassUser02UserArnB4B8C9E3": {
+      "DependsOn": [
+        "SsmParamBreakGlassUser01UserArn935D8C01",
+      ],
+      "Properties": {
+        "Name": "/accelerator/iam/user/breakGlassUser02/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "BreakGlassUser02DFF444C8",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamDefaultBoundaryPolicyPolicyArnD6B0A5E8": {
+      "Properties": {
+        "Name": "/accelerator/iam/policy/Default-Boundary-Policy/arn",
+        "Type": "String",
+        "Value": {
+          "Ref": "DefaultBoundaryPolicy489A8D26",
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "SsmParamEc2DefaultSsmAdRoleRoleArnEA559EEC": {
+      "Properties": {
+        "Name": "/accelerator/iam/role/EC2-Default-SSM-AD-Role/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "Ec2DefaultSsmAdRoleADFFA4C6",
+            "Arn",
+          ],
+        },
       },
       "Type": "AWS::SSM::Parameter",
     },

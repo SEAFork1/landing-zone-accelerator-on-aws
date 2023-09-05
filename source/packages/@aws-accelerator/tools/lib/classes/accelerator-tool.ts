@@ -15,7 +15,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as winston from 'winston';
 
-import { GlobalConfig, SecurityConfig } from '@aws-accelerator/config';
+import { GlobalConfig } from '@aws-accelerator/config';
 import { createLogger, throttlingBackOff } from '@aws-accelerator/utils';
 import { BackupClient, DeleteBackupVaultCommand } from '@aws-sdk/client-backup';
 import {
@@ -37,7 +37,12 @@ import {
 import { CodeCommitClient, DeleteRepositoryCommand, GetFileCommand } from '@aws-sdk/client-codecommit';
 import { CodePipelineClient, GetPipelineCommand, StageDeclaration } from '@aws-sdk/client-codepipeline';
 import { DeleteRepositoryCommand as DeleteEcr, DescribeRepositoriesCommand, ECRClient } from '@aws-sdk/client-ecr';
-import { DetachRolePolicyCommand, IAMClient, ListAttachedRolePoliciesCommand } from '@aws-sdk/client-iam';
+import {
+  DetachRolePolicyCommand,
+  IAMClient,
+  ListAttachedRolePoliciesCommand,
+  ListEntitiesForPolicyCommand,
+} from '@aws-sdk/client-iam';
 import {
   DescribeKeyCommand,
   DisableKeyCommand,
@@ -61,6 +66,7 @@ import {
   GetCallerIdentityCommand,
   STSClient,
 } from '@aws-sdk/client-sts';
+import { ConfigServiceClient, DescribeConfigRulesCommand } from '@aws-sdk/client-config-service';
 
 /**
  * Type for pipeline stage action information with order and action name
@@ -133,12 +139,6 @@ export class AcceleratorTool {
    * @private
    */
   private globalConfig: GlobalConfig | undefined;
-
-  /**
-   * Pipeline security Config
-   * @private
-   */
-  private securityConfig: SecurityConfig | undefined;
 
   /**
    * globalRegion
@@ -276,9 +276,14 @@ export class AcceleratorTool {
   private buckets: { client: S3Client; stackName: string; bucket: string }[] = [];
 
   /**
-   * List of IAM roles will be used to delete post stack deletion
+   * List of IAM roles to have policies detached prior to stack deletion
    */
   private iamRoles: { client: IAMClient; stackName: string; roleName: string }[] = [];
+
+  /**
+   * List of IAM policies to be detached prior to stack deletion
+   */
+  private iamPolicies: { client: IAMClient; stackName: string; policyName: string }[] = [];
 
   /**
    * pipelineManagementAccount
@@ -532,9 +537,6 @@ export class AcceleratorTool {
       // Get Pipeline Global config
       this.globalConfig = await this.getGlobalConfig();
 
-      // Get Pipeline Security config
-      this.securityConfig = await this.getSecurityConfig();
-
       // Set pipeline management account details
       this.pipelineManagementAccount = await this.getPipelineManagementAccount();
 
@@ -774,42 +776,48 @@ export class AcceleratorTool {
   }
 
   /**
-   * Function to get SecurityConfig object from the repo content
-   * @private
-   */
-  private async getSecurityConfig(): Promise<SecurityConfig> {
-    const codeCommitClient = new CodeCommitClient({});
-    const response = await throttlingBackOff(() =>
-      codeCommitClient.send(
-        new GetFileCommand({
-          repositoryName: this.pipelineConfigSourceRepo!.repositoryName,
-          filePath: 'security-config.yaml',
-        }),
-      ),
-    );
-
-    const tempDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'accel-config'));
-    fs.writeFileSync(path.join(tempDirPath, 'security-config.yaml'), response.fileContent!, 'utf8');
-    return SecurityConfig.load(tempDirPath);
-  }
-
-  /**
    * Function to get list of managed policies which are assigned to IAM roles by SSM automation accelerator-ec2-instance-profile-permission
    * @returns
    */
-  private getSsmManagedPolicies(): string[] {
-    for (const ruleSet of this.securityConfig!.awsConfig.ruleSets ?? []) {
-      for (const rule of ruleSet.rules) {
-        if (rule.name.toString() === 'accelerator-ec2-instance-profile-permission') {
-          for (const [key, value] of Object.entries(rule.inputParameters)) {
-            if (key === 'AWSManagedPolicies') {
-              return (value as string).split(',');
-            }
-          }
+  private async getSsmManagedPolicies(): Promise<string[]> {
+    //Get the actual values from the Config rule (not the securityConfig) to make sure we are getting the resolved ${ACCEL_LOOKUP} values.
+    const policies: string[] = [];
+    const configClient = new ConfigServiceClient({});
+
+    try {
+      const response = await throttlingBackOff(() =>
+        configClient.send(
+          new DescribeConfigRulesCommand({
+            ConfigRuleNames: ['accelerator-ec2-instance-profile-permission'],
+          }),
+        ),
+      );
+
+      //If rule not implemented, return empty array.
+      if (typeof response.ConfigRules![0] == 'undefined') {
+        return [];
+      }
+
+      //else, get inputParameters from the Config rule
+      const configRule = response.ConfigRules![0];
+      const inputParameters = configRule.InputParameters;
+      if (typeof inputParameters == 'undefined') {
+        return [];
+      }
+
+      for (const [key, value] of Object.entries(JSON.parse(inputParameters))) {
+        if (key === 'AWSManagedPolicies' || key === 'CustomerManagedPolicies') {
+          policies.push(...(value as string).split(','));
         }
       }
+    } catch (
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      e: any
+    ) {
+      this.debugLog(e, 'error');
     }
-    return [];
+
+    return policies;
   }
 
   /**
@@ -903,22 +911,21 @@ export class AcceleratorTool {
     return true;
   }
 
-  private async deleteIamRolePolicy(): Promise<void> {
+  private async removeSsmManagedPolicies(): Promise<void> {
+    // get SsmManagedPolicies onces
+    const ssmManagedPolicies = await this.getSsmManagedPolicies();
+
     for (const item of this.iamRoles) {
-      // this.debugLog(`Deleting IAM Role ${item.roleName} from ${item.stackName} stack`, 'info');
+      this.debugLog(`Deleting IAM Role ${item.roleName} from ${item.stackName} stack`, 'info');
       try {
-        // Remove managed policies
+        // Get managed policies
         const listAttachedRolePoliciesResponse = await throttlingBackOff(() =>
           item.client.send(new ListAttachedRolePoliciesCommand({ RoleName: item.roleName })),
         );
 
+        //Delete managed policies
         for (const policy of listAttachedRolePoliciesResponse.AttachedPolicies!) {
-          if (
-            this.getSsmManagedPolicies().indexOf(policy.PolicyName!) !== -1
-            // policy.PolicyName === 'AmazonSSMManagedInstanceCore' ||
-            // policy.PolicyName === 'AmazonSSMDirectoryServiceAccess' ||
-            // policy.PolicyName === 'CloudWatchAgentServerPolicy'
-          ) {
+          if (ssmManagedPolicies.indexOf(policy.PolicyName!) !== -1) {
             this.debugLog(
               `Managed policy ${policy.PolicyName} detached from IAM Role ${item.roleName} from ${item.stackName}`,
               'info',
@@ -938,6 +945,37 @@ export class AcceleratorTool {
       }
     }
     this.iamRoles = [];
+  }
+
+  private async detachPoliciesFromRole(): Promise<void> {
+    for (const item of this.iamPolicies) {
+      this.debugLog(`Detaching IAM policy ${item.policyName} from ${item.stackName} stack`, 'info');
+
+      try {
+        // Get roles with this policy attached
+        const listEntitiesForPolicyResponse = await throttlingBackOff(() =>
+          item.client.send(new ListEntitiesForPolicyCommand({ PolicyArn: item.policyName })),
+        );
+        //Detach policy from roles
+        for (const role of listEntitiesForPolicyResponse.PolicyRoles!) {
+          this.debugLog(
+            `Detaching policy ${item.policyName} from role ${role.RoleName} from ${item.stackName} stack`,
+            'info',
+          );
+          await throttlingBackOff(() =>
+            item.client.send(new DetachRolePolicyCommand({ RoleName: role.RoleName, PolicyArn: item.policyName })),
+          );
+        }
+      } catch (
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        e: any
+      ) {
+        if (e.name === 'NoSuchEntity') {
+          this.debugLog(`IAM Policy ${item.policyName} from ${item.stackName} stack not found !!`, 'info');
+        }
+      }
+    }
+    this.iamPolicies = [];
   }
 
   /**
@@ -1121,18 +1159,22 @@ export class AcceleratorTool {
             }
             break;
           case 'AWS::IAM::Role':
-            // This is needed because SessionManagerEC2Role will have managed policies by SSM automation
-            // which will cause stack deletion to fail
-            // if (
-            //   stackResourceSummary.PhysicalResourceId!.includes('AWSAccelerator-SessionManagerEC2Role') &&
-            //   iamClient
-            // ) {
+            // This is needed because roles may have policies added from the 'accelerator-ec2-instance-profile-permission'
+            // config rule which will cause stack deletion to fail
             this.iamRoles.push({
               client: iamClient,
               stackName: stackName,
               roleName: stackResourceSummary.PhysicalResourceId!,
             });
-            // }
+            break;
+          case 'AWS::IAM::ManagedPolicy':
+            // This is needed because the SecurityResources stack creates a policy that can be attached to roles for SSM logging.
+            // We have to detach the policy from any roles or the stack will fail to delete the policy.
+            this.iamPolicies.push({
+              client: iamClient,
+              stackName: stackName,
+              policyName: stackResourceSummary.PhysicalResourceId!,
+            });
             break;
         }
       }
@@ -1788,8 +1830,10 @@ export class AcceleratorTool {
    * Function to delete resources before stack deletion
    */
   private async deletePreStackDeleteResources(): Promise<void> {
-    // Delete IAM roles
-    await this.deleteIamRolePolicy();
+    // 1. For roles in this stack, remove SsmManagedPolicies that would prevent role deletion
+    await this.removeSsmManagedPolicies();
+    // 2. For policies in this stack, detach from any roles that would prevent policy deletion
+    await this.detachPoliciesFromRole();
   }
 
   /**

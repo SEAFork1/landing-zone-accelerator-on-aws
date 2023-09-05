@@ -111,6 +111,10 @@ export interface ActiveDirectoryConfigurationProps {
    */
   readonly adUsers: { name: string; email: string; groups: string[] }[];
   /**
+   * Accelerator prefix for user secret names
+   */
+  readonly secretPrefix: string;
+  /**
    * Managed active directory user password policy
    */
   readonly adPasswordPolicy: {
@@ -164,6 +168,19 @@ export class ActiveDirectoryConfiguration extends Construct {
       }),
     );
 
+    // enforce using Instance Metadata Service Version 2 (IMDSv2)
+    // https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html
+    const launchTemplateId = `${props.managedActiveDirectoryName}LaunchTemplate`;
+    const launchTemplate = new cdk.aws_ec2.CfnLaunchTemplate(this, pascalCase(launchTemplateId), {
+      launchTemplateName: launchTemplateId,
+      launchTemplateData: {
+        metadataOptions: {
+          httpTokens: 'required',
+          httpEndpoint: 'enabled',
+        },
+      },
+    });
+
     const instance = new cdk.aws_ec2.CfnInstance(this, pascalCase(`${props.managedActiveDirectoryName}Instance`), {
       instanceType: props.instanceType,
       iamInstanceProfile: role.roleName,
@@ -183,6 +200,10 @@ export class ActiveDirectoryConfiguration extends Construct {
       ],
       tags: [{ key: 'Name', value: pascalCase(`${props.managedActiveDirectoryName}-ConfiguringInstance`) }],
       disableApiTermination: props.enableTerminationProtection,
+      launchTemplate: {
+        version: launchTemplate.attrLatestVersionNumber,
+        launchTemplateName: launchTemplateId,
+      },
     });
 
     instance.node.addDependency(keyPair);
@@ -231,33 +252,30 @@ export class ActiveDirectoryConfiguration extends Construct {
         content: fs.readFileSync(userDataScript.path, 'utf8'),
       };
 
-      if (userDataScript.name === 'JoinDomain') {
-        joinDomainScriptName = fileName;
-      }
-
-      if (userDataScript.name === 'ADGroupSetup') {
-        adGroupSetupScriptName = fileName;
-      }
-
-      if (userDataScript.name === 'ADConnectorPermissionsSetup') {
-        adConnectorPermissionSetupScriptName = fileName;
-      }
-
-      if (userDataScript.name === 'ADUserSetup') {
-        adUserSetupScriptName = fileName;
-      }
-
-      if (userDataScript.name === 'ADUserGroupSetup') {
-        adUserGroupSetupScriptName = fileName;
-      }
-
-      if (userDataScript.name === 'ConfigurePasswordPolicy') {
-        configurePasswordPolicyScriptName = fileName;
+      switch (userDataScript.name) {
+        case 'JoinDomain':
+          joinDomainScriptName = fileName;
+          break;
+        case 'ADGroupSetup':
+          adGroupSetupScriptName = fileName;
+          break;
+        case 'ADConnectorPermissionsSetup':
+          adConnectorPermissionSetupScriptName = fileName;
+          break;
+        case 'ADUserSetup':
+          adUserSetupScriptName = fileName;
+          break;
+        case 'ADUserGroupSetup':
+          adUserGroupSetupScriptName = fileName;
+          break;
+        case 'ConfigurePasswordPolicy':
+          configurePasswordPolicyScriptName = fileName;
+          break;
       }
     }
 
     // Creating AD Users scripts
-    const adUsersScripts = this.getAdUsersScripts(adUserSetupScriptName);
+    const adUsersScripts = this.getAdUsersScripts(adUserSetupScriptName, props.secretPrefix);
 
     const accountNames = props.accountNames;
 
@@ -394,10 +412,10 @@ export class ActiveDirectoryConfiguration extends Construct {
   /**
    * Function to get Ad user creation scripts
    */
-  private getAdUsersScripts(adUserSetupScriptName: string): string[] {
+  private getAdUsersScripts(adUserSetupScriptName: string, secretPrefix: string): string[] {
     const adUsersCommand: string[] = [];
     for (const adUser of this.activeDirectoryConfigurationProps.adUsers ?? []) {
-      const secretName = `/accelerator/ad-user/${this.activeDirectoryConfigurationProps.managedActiveDirectoryName}/${adUser.name}`;
+      const secretName = `${secretPrefix}/ad-user/${this.activeDirectoryConfigurationProps.managedActiveDirectoryName}/${adUser.name}`;
       const secretArn = `arn:${cdk.Stack.of(this).partition}:secretsmanager:${
         this.activeDirectoryConfigurationProps.managedActiveDirectorySecretRegion
       }:${this.activeDirectoryConfigurationProps.managedActiveDirectorySecretAccountId}:secret:${secretName}`;

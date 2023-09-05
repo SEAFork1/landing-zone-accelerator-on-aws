@@ -471,6 +471,20 @@ prefixLists:
     maxEntries: 1
     entries:
       - 10.100.0.1/32
+  - name: accelerator-prefix-list-ipv6
+    deploymentTargets:
+      organizationalUnits:
+        - Infrastructure
+    addressFamily: IPv6
+    maxEntries: 10
+    entries:
+      - 2400:cb00::/32
+      - 2606:4700::/32
+      - 2803:f800::/32
+      - 2405:b500::/32
+      - 2405:8100::/32
+      - 2a06:98c0::/29
+      - 2c0f:f248::/32
 
 endpointPolicies:
   - name: Default
@@ -635,6 +649,25 @@ vpcs:
         ipamAllocation:
           ipamPoolName: home-region-prod-pool
           netmaskLength: 28
+      - name: Network-Secondary-Outposts-A
+        routeTable: Network-Secondary-A-Rt
+        outpost: accelerator-outpost-a
+        ipamAllocation:
+          ipamPoolName: home-region-prod-pool
+          netmaskLength: 28
+      - name: Network-Secondary-Outposts-1
+        routeTable: Network-Secondary-A-Rt
+        outpost: accelerator-outpost-1
+        ipamAllocation:
+          ipamPoolName: home-region-prod-pool
+          netmaskLength: 28
+    outposts:
+      - name: accelerator-outpost-a
+        arn: test-arn
+        availabilityZone: a
+      - name: accelerator-outpost-1
+        arn: test-arn-2
+        availabilityZone: 1
     networkAcls:
       - name: TestNacl
         subnetAssociations:
@@ -931,6 +964,14 @@ vpcs:
         - service: kms
         - service: logs
         - service: s3
+        - service: ecr.dkr
+        - service: s3-global.accesspoint
+        - service: codeartifact.repositories
+        - service: codeartifact.api
+        - service: eks
+          applyPolicy: false
+        - service: secretsmanager
+          securityGroup: Network-Endpoints-CustomEndpointSg
         # - service: secretsmanager
         # - service: cloudformation
         # - service: access-analyzer
@@ -946,7 +987,6 @@ vpcs:
         # - service: codepipeline
         # - service: config
         # - service: datasync
-        # - service: ecr.dkr
         # - service: ecs
         # - service: ecs-agent
         # - service: ecs-telemetry
@@ -972,7 +1012,6 @@ vpcs:
         # - service: transfer
         # - service: workspaces
         # - service: awsconnector
-        # - service: ecr.api
         # - service: kinesis-firehose
         # - service: states
         # - service: acm-pca
@@ -1048,6 +1087,21 @@ vpcs:
               - 22
             sources:
               - 10.0.0.0/8
+      - name: Network-Endpoints-CustomEndpointSg
+        description: Accelerator security group for custom endpoint
+        inboundRules:
+          - description: Allow access to 443
+            types:
+              - HTTPS
+            sources:
+              - 0.0.0.0/0
+
+        outboundRules:
+          - description: Allow all outbound
+            types:
+              - ALL
+            sources:
+              - 0.0.0.0/0
     networkAcls:
       - name: TestNACL
         subnetAssociations:
@@ -1509,6 +1563,114 @@ vpcs:
         - pkt-dst-aws-service
         - flow-direction
         - traffic-path
+  - name: SharedServices-appVpc
+    account: SharedServices
+    region: us-east-1
+    cidrs:
+      - 10.1.0.0/16
+    internetGateway: true
+    enableDnsHostnames: true
+    enableDnsSupport: true
+    instanceTenancy: default
+    routeTables:
+      - name: SharedServices-appVpc-PrivRtA
+        routes:
+          - name: SharedServices-appVpc-NatRouteA
+            destination: 0.0.0.0/0
+            type: natGateway
+            target: SharedServices-appVpc-NatGwA
+      - name: SharedServices-appVpc-PrivRtB
+        routes:
+          - name: SharedServices-appVpc-NatRouteB
+            destination: 0.0.0.0/0
+            type: natGateway
+            target: SharedServices-appVpc-NatGwB
+      - name: SharedServices-appVpc-PublicRouteA
+        routes:
+          - name: IgwRoute
+            destination: 0.0.0.0/0
+            type: internetGateway
+            target: IGW
+      - name: SharedServices-appVpc-PublicRouteB
+        routes:
+          - name: IgwRoute
+            destination: 0.0.0.0/0
+            type: internetGateway
+            target: IGW
+    subnets:
+      - name: SharedServices-appVpc-PublicSubnetA
+        availabilityZone: a
+        routeTable: SharedServices-appVpc-PublicRouteA
+        ipv4CidrBlock: 10.1.0.0/24
+      - name: SharedServices-appVpc-PublicSubnetB
+        availabilityZone: b
+        routeTable: SharedServices-appVpc-PublicRouteB
+        ipv4CidrBlock: 10.1.1.0/24
+      - name: SharedServices-appVpc-PrivateSubnetA
+        availabilityZone: a
+        routeTable: SharedServices-appVpc-PrivRtA
+        ipv4CidrBlock: 10.1.2.0/24
+      - name: SharedServices-appVpc-PrivateSubnetB
+        availabilityZone: b
+        routeTable: SharedServices-appVpc-PrivRtB
+        ipv4CidrBlock: 10.1.3.0/24
+    natGateways:
+      - name: SharedServices-appVpc-NatGwA
+        subnet: SharedServices-appVpc-PublicSubnetA
+      - name: SharedServices-appVpc-NatGwB
+        subnet: SharedServices-appVpc-PublicSubnetB
+    securityGroups:
+      - name: SharedServices-appVpc-appSecurityGroup
+        description: Accelerator security group
+        inboundRules:
+          - description: Remote access security group
+            types:
+              - ALL
+            sources:
+              - securityGroups:
+                  - SharedServices-appVpc-appSecurityGroup
+
+        outboundRules:
+          - description: Allow all outbound
+            types:
+              - ALL
+            sources:
+              - 0.0.0.0/0
+    vpcFlowLogs:
+      trafficType: ALL
+      maxAggregationInterval: 600
+      destinations:
+        #    - s3
+        - cloud-watch-logs
+      defaultFormat: false
+      customFields:
+        - version
+        - account-id
+        - interface-id
+        - srcaddr
+        - dstaddr
+        - srcport
+        - dstport
+        - protocol
+        - packets
+        - bytes
+        - start
+        - end
+        - action
+        - log-status
+        - vpc-id
+        - subnet-id
+        - instance-id
+        - tcp-flags
+        - type
+        - pkt-srcaddr
+        - pkt-dstaddr
+        - region
+        - az-id
+        - pkt-src-aws-service
+        - pkt-dst-aws-service
+        - flow-direction
+        - traffic-path
 
 directConnectGateways:
   - name: Network-DXGW
@@ -1572,6 +1734,58 @@ customerGateways:
           - tunnelInsideCidr: 169.254.100.0/30
           - tunnelInsideCidr: 169.254.100.100/30
 
+      - name: enhanced-vpn
+        amazonIpv4NetworkCidr: 10.0.0.0/16
+        customerIpv4NetworkCidr: 192.168.0.0/16
+        enableVpnAcceleration: true
+        transitGateway: Network-Main
+        routeTableAssociations:
+          - Network-Main-Core
+        routeTablePropagations:
+          - Network-Main-Core
+        staticRoutesOnly: false
+        tunnelSpecifications:
+          - tunnelInsideCidr: 169.254.200.0/30
+            dpdTimeoutAction: restart
+            dpdTimeoutSeconds: 60
+            ikeVersions: [2]
+            logging:
+              enable: true
+            phase1:
+              dhGroups: [2, 14, 20, 21, 22]
+              encryptionAlgorithms: [AES256, AES256-GCM-16]
+              integrityAlgorithms: [SHA2-256, SHA2-512]
+              lifetimeSeconds: 3600
+            phase2:
+              dhGroups: [5, 20]
+              encryptionAlgorithms: [AES128]
+              integrityAlgorithms: [SHA2-256]
+              lifetimeSeconds: 900
+            rekeyFuzzPercentage: 80
+            rekeyMarginTimeSeconds: 350
+            replayWindowSize: 64
+            startupAction: start
+            tunnelLifecycleControl: false
+          - tunnelInsideCidr: 169.254.200.100/30
+            dpdTimeoutAction: clear
+            dpdTimeoutSeconds: 120
+            ikeVersions: [2]
+            logging:
+              enable: true
+            phase1:
+              dhGroups: [2, 14, 20, 21, 22]
+              encryptionAlgorithms: [AES256, AES256-GCM-16]
+              integrityAlgorithms: [SHA2-256, SHA2-512]
+              lifetimeSeconds: 3600
+            phase2:
+              dhGroups: [5, 20]
+              encryptionAlgorithms: [AES128]
+              integrityAlgorithms: [SHA2-256]
+              lifetimeSeconds: 900
+            rekeyFuzzPercentage: 65
+            rekeyMarginTimeSeconds: 120
+            replayWindowSize: 64
+
 vpcFlowLogs:
   trafficType: ALL
   maxAggregationInterval: 60
@@ -1580,7 +1794,11 @@ vpcFlowLogs:
     - cloud-watch-logs
   destinationsConfig:
     s3:
-      lifecycleRules: []
+      lifecycleRules: 
+        - abortIncompleteMultipartUpload: 1
+          enabled: true
+          expiration: 365
+          noncurrentVersionExpiration: 30
     cloudWatchLogs:
       retentionInDays: 3653
   defaultFormat: true
@@ -1622,6 +1840,7 @@ certificates:
       accounts:
         - Management
         - Audit
+        - SharedServices
       organizationalUnits:
         - Security
   - name: cert2
@@ -1644,7 +1863,7 @@ certificates:
       organizationalUnits:
         - Security
 
-firewallManager:
+firewallManagerService:
   delegatedAdminAccount: Audit
   notificationChannels:
     - snsTopic: Security

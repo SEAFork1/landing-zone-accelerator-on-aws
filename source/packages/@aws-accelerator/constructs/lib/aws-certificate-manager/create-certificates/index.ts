@@ -30,25 +30,20 @@ export async function handler(event: AWSLambda.CloudFormationCustomResourceEvent
     }
   | undefined
 > {
-  //print out the event in case manual intervention is needed
-  console.log(event);
-
   //set variables from event
-  const name = event.ResourceProperties['name'];
-  const type = event.ResourceProperties['type'];
-  const privKey = event.ResourceProperties['privKey']!;
-  const cert = event.ResourceProperties['cert']!;
-  const chain = event.ResourceProperties['chain']!;
-  const validation = event.ResourceProperties['validation']!;
-  const domain = event.ResourceProperties['domain']!;
-  const sanString = event.ResourceProperties['san']!;
-  const assetBucket = event.ResourceProperties['assetBucketName'];
+  const parameterName: string = event.ResourceProperties['parameterName'];
+  const type: string = event.ResourceProperties['type'];
+  const privKey: string | undefined = event.ResourceProperties['privKey'];
+  const cert: string | undefined = event.ResourceProperties['cert'];
+  const chain: string | undefined = event.ResourceProperties['chain'];
+  const validation: string | undefined = event.ResourceProperties['validation'];
+  const domain: string | undefined = event.ResourceProperties['domain']!;
+  const sanString: string | undefined = event.ResourceProperties['san'];
+  const assetBucketName: string = event.ResourceProperties['assetBucketName'];
+  const homeRegion: string = event.ResourceProperties['homeRegion'];
+  const isExistingCertificate = event.ResourceProperties['isExisting'];
 
-  let san: string[] | undefined = undefined;
-  if (sanString) {
-    san = sanString.split(',');
-  }
-  const homeRegion = event.ResourceProperties['homeRegion'];
+  const san = sanString ? sanString.split(',') : undefined;
   const solutionId = process.env['SOLUTION_ID'];
 
   const acmClient = new AWS.ACM({ customUserAgent: solutionId });
@@ -57,82 +52,108 @@ export async function handler(event: AWSLambda.CloudFormationCustomResourceEvent
 
   switch (event.RequestType) {
     case 'Create':
-    case 'Update':
-      try {
-        let certificateArn: AWS.ACM.RequestCertificateResponse | AWS.ACM.ImportCertificateResponse;
-        if (type === 'import') {
-          const privKeyContent = await getS3FileContents(assetBucket, privKey, s3Client);
-          const certContent = await getS3FileContents(assetBucket, cert!, s3Client);
-          const chainContents = await getS3FileContents(assetBucket, chain!, s3Client);
-
-          certificateArn = await throttlingBackOff(() =>
-            acmClient
-              .importCertificate({
-                Certificate: certContent!,
-                CertificateChain: chainContents ?? undefined,
-                PrivateKey: privKeyContent!,
-              })
-              .promise(),
-          );
-          await throttlingBackOff(() =>
-            ssmClient
-              .putParameter({
-                Name: `/accelerator/acm/${name}/arn`,
-                Value: certificateArn.CertificateArn!,
-                Type: 'String',
-                Overwrite: true,
-              })
-              .promise(),
-          );
-
-          return { Status: 'Success', StatusCode: 200 };
-        } else if (type === 'request') {
-          certificateArn = await throttlingBackOff(() =>
-            acmClient
-              .requestCertificate({ DomainName: domain, ValidationMethod: validation, SubjectAlternativeNames: san })
-              .promise(),
-          );
-          await throttlingBackOff(() =>
-            ssmClient
-              .putParameter({
-                Name: `/accelerator/acm/${name}/arn`,
-                Value: certificateArn.CertificateArn!,
-                Type: 'String',
-                Overwrite: true,
-              })
-              .promise(),
-          );
-          return { Status: 'Success', StatusCode: 200 };
+      if (isExistingCertificate === 'true') {
+        const certArn = await throttlingBackOff(() => ssmClient.getParameter({ Name: parameterName }).promise());
+        if (!certArn) {
+          throw new Error(`No SSM Parameter "${parameterName}" found for existing Certificate`);
         }
-      } catch (e) {
-        throw new Error(`There was an error during ${type} on ${event.RequestType} of certificate ${name}: ${e}`);
+        break;
       }
+      await createUpdateEventHandler({
+        acmClient,
+        s3Client,
+        ssmClient,
+        parameterName,
+        type,
+        assetBucketName,
+        privKey,
+        cert,
+        chain,
+        domain,
+        validation,
+        san,
+      });
+      break;
+    case 'Update':
+      await createUpdateEventHandler({
+        acmClient,
+        s3Client,
+        ssmClient,
+        parameterName,
+        type,
+        assetBucketName,
+        privKey,
+        cert,
+        chain,
+        domain,
+        validation,
+        san,
+      });
       break;
     case 'Delete':
-      try {
-        const certArn = await throttlingBackOff(() =>
-          ssmClient.getParameter({ Name: `/accelerator/acm/${name}/arn` }).promise(),
-        );
-        const certArnValue: string | undefined = certArn.Parameter?.Value ?? undefined;
-        if (certArnValue) {
-          await throttlingBackOff(() => acmClient.deleteCertificate({ CertificateArn: certArnValue }).promise());
-          await throttlingBackOff(() => ssmClient.deleteParameter({ Name: `/accelerator/acm/${name}/arn` }).promise());
-        }
-      } catch (e) {
-        throw new Error(`There was an error during ${type} on ${event.RequestType} of certificate ${name}: ${e}`);
+      const certArn = await throttlingBackOff(() => ssmClient.getParameter({ Name: parameterName }).promise());
+      const certArnValue: string | undefined = certArn.Parameter?.Value ?? undefined;
+      if (certArnValue) {
+        await throttlingBackOff(() => acmClient.deleteCertificate({ CertificateArn: certArnValue }).promise());
+        await throttlingBackOff(() => ssmClient.deleteParameter({ Name: parameterName }).promise());
       }
+      break;
   }
   return { Status: 'Success', StatusCode: 200 };
 }
 
+/**
+ * Function to handle create or update event for the custom resource lambda function
+ * @param props
+ */
+async function createUpdateEventHandler(props: {
+  acmClient: AWS.ACM;
+  s3Client: S3Client;
+  ssmClient: AWS.SSM;
+  parameterName: string;
+  type: string;
+  assetBucketName: string;
+  privKey?: string;
+  cert?: string;
+  chain?: string;
+  domain?: string;
+  validation?: string;
+  san?: string[];
+}): Promise<void> {
+  let certificateArn: AWS.ACM.RequestCertificateResponse | AWS.ACM.ImportCertificateResponse | undefined;
+  switch (props.type) {
+    case 'import':
+      const privKeyContent = await getS3FileContents(props.assetBucketName, props.s3Client, props.privKey);
+      const certContent = await getS3FileContents(props.assetBucketName, props.s3Client, props.cert);
+      const chainContents = await getS3FileContents(props.assetBucketName, props.s3Client, props.chain);
+      certificateArn = await createImportCertificate(props.acmClient, certContent, chainContents, privKeyContent);
+      break;
+    case 'request':
+      certificateArn = await createRequestCertificate(props.acmClient, props.domain, props.validation, props.san);
+      break;
+    default:
+      throw new Error(
+        `Invalid certificate type ${props.type} !!!. Valid certificate types can be either import or request !!!!`,
+      );
+  }
+  await createCertificateSsmParameter(props.ssmClient, props.parameterName, certificateArn!);
+}
+
+/**
+ * Function to get S3 file contents for certificate details
+ * @param s3BucketName string
+ * @param s3Client {@link S3Client}
+ * @param s3Key string
+ * @returns
+ */
 async function getS3FileContents(
-  s3Bucket: string,
-  s3Key: string | undefined,
+  s3BucketName: string,
   s3Client: S3Client,
+  s3Key?: string,
 ): Promise<string | undefined> {
   if (s3Key) {
     const response = await throttlingBackOff(() =>
-      s3Client.send(new GetObjectCommand({ Bucket: s3Bucket, Key: s3Key })),
+      s3Client.send(new GetObjectCommand({ Bucket: s3BucketName, Key: s3Key })),
     );
     const stream = response.Body as Readable;
     return streamToString(stream);
@@ -148,4 +169,80 @@ async function streamToString(stream: Readable): Promise<string> {
     stream.on('error', reject);
     stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
   });
+}
+
+/**
+ * Function to create Import Certificate
+ * @param acmClient {@link AWS.ACM}
+ * @param cert string
+ * @param chain string
+ * @param privKey string
+ * @returns certificate {@link AWS.ACM.ImportCertificateResponse}
+ */
+async function createImportCertificate(
+  acmClient: AWS.ACM,
+  cert?: string,
+  chain?: string,
+  privKey?: string,
+): Promise<AWS.ACM.ImportCertificateResponse> {
+  if (!cert || !privKey) {
+    throw new Error('Missing certificate or private key in custom resource event properties');
+  }
+
+  return await throttlingBackOff(() =>
+    acmClient.importCertificate({ Certificate: cert, CertificateChain: chain, PrivateKey: privKey }).promise(),
+  );
+}
+
+/**
+ * Function to create request certificate
+ * @param acmClient {@link AWS.ACM}
+ * @param domain string
+ * @param validation string
+ * @param san string
+ * @returns certificate {@link AWS.ACM.RequestCertificateResponse}
+ */
+async function createRequestCertificate(
+  acmClient: AWS.ACM,
+  domain?: string,
+  validation?: string,
+  san?: string[],
+): Promise<AWS.ACM.RequestCertificateResponse> {
+  if (!domain) {
+    throw new Error('Missing domain in custom resource event properties');
+  }
+
+  return await throttlingBackOff(() =>
+    acmClient
+      .requestCertificate({ DomainName: domain, ValidationMethod: validation, SubjectAlternativeNames: san })
+      .promise(),
+  );
+}
+
+/**
+ * Function to create SSM parameter to store certificate arn value
+ * @param ssmClient {@link AWS.SSM}
+ * @param parameterName string
+ * @param certificateArnItem {@link AWS.ACM.RequestCertificateResponse} | {@link AWS.ACM.ImportCertificateResponse}
+ */
+async function createCertificateSsmParameter(
+  ssmClient: AWS.SSM,
+  parameterName: string,
+  certificateArnItem: AWS.ACM.RequestCertificateResponse | AWS.ACM.ImportCertificateResponse,
+): Promise<void> {
+  if (!certificateArnItem.CertificateArn) {
+    throw new Error(
+      `Missing certificateArn value in ACM client response, unable to create certificate SSM parameter ${parameterName} !!!`,
+    );
+  }
+  await throttlingBackOff(() =>
+    ssmClient
+      .putParameter({
+        Name: parameterName,
+        Value: certificateArnItem.CertificateArn!,
+        Type: 'String',
+        Overwrite: true,
+      })
+      .promise(),
+  );
 }

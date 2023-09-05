@@ -14,8 +14,12 @@ import * as cdk from 'aws-cdk-lib';
 import { pascalCase } from 'change-case';
 import { Construct } from 'constructs';
 import * as path from 'path';
-import { NagSuppressions } from 'cdk-nag';
-import { AcceleratorKeyType, AcceleratorStack, AcceleratorStackProps } from './accelerator-stack';
+import {
+  AcceleratorStack,
+  AcceleratorStackProps,
+  AcceleratorKeyType,
+  NagSuppressionRuleIds,
+} from './accelerator-stack';
 import {
   AppConfigItem,
   VpcConfig,
@@ -34,6 +38,7 @@ import {
   LaunchTemplate,
   AutoscalingGroup,
 } from '@aws-accelerator/constructs';
+import { SsmResourceType } from '@aws-accelerator/utils';
 
 export type PrivateIpAddressConfig = {
   primary: boolean | undefined;
@@ -113,38 +118,38 @@ export class ApplicationsStack extends AcceleratorStack {
   private securityGroupMap: Map<string, string>;
   private subnetMap: Map<string, string>;
   private vpcMap: Map<string, string>;
-  private cloudwatchKey: cdk.aws_kms.IKey;
-  private lambdaKey: cdk.aws_kms.IKey;
   constructor(scope: Construct, id: string, props: ApplicationStackProps) {
     super(scope, id, props);
     this.props = props;
-
-    this.lambdaKey = this.getAcceleratorKey(AcceleratorKeyType.LAMBDA_KEY);
-
-    this.cloudwatchKey = this.getAcceleratorKey(AcceleratorKeyType.CLOUDWATCH_KEY);
-
     const allVpcItems = [...props.networkConfig.vpcs, ...(props.networkConfig.vpcTemplates ?? [])] ?? [];
     const allAppConfigs: AppConfigItem[] = props.customizationsConfig.applications ?? [];
-    const accessLogsBucket = `${
-      this.acceleratorResourceNames.bucketPrefixes.elbLogs
-    }-${this.props.accountsConfig.getLogArchiveAccountId()}-${this.props.centralizedLoggingRegion}`;
+    const elbLogsBucketName = this.getElbLogsBucketName();
 
     // Set initial private properties
     [this.securityGroupMap, this.subnetMap, this.vpcMap] = this.setInitialMaps(allVpcItems, allAppConfigs);
 
+    const lambdaKey = this.getAcceleratorKey(AcceleratorKeyType.LAMBDA_KEY) as cdk.aws_kms.Key;
+
+    const cloudwatchKey = this.getAcceleratorKey(AcceleratorKeyType.CLOUDWATCH_KEY) as cdk.aws_kms.Key;
+
     //Create application config resources
     this.createApplicationConfigResources(
       props.appConfigItem,
-      this.securityGroupMap,
-      this.subnetMap,
-      this.vpcMap,
+      { securityGroupMap: this.securityGroupMap, subnetMap: this.subnetMap, vpcMap: this.vpcMap },
       props.configDirPath,
       allVpcItems,
-      accessLogsBucket,
+      elbLogsBucketName,
+      lambdaKey,
+      { key: cloudwatchKey, logRetentionInDays: this.props.globalConfig.cloudwatchLogRetentionInDays },
     );
 
     // Create SSM parameters
     this.createSsmParameters();
+
+    //
+    // Create NagSuppressions
+    //
+    this.addResourceSuppressionsByPath();
 
     this.logger.info('Completed stack synthesis');
   }
@@ -206,14 +211,14 @@ export class ApplicationsStack extends AcceleratorStack {
       // Set VPC ID
       const vpcId = cdk.aws_ssm.StringParameter.valueForStringParameter(
         this,
-        `/accelerator/network/vpc/${vpcItem.name}/id`,
+        this.getSsmPath(SsmResourceType.VPC, [vpcItem.name]),
       );
       vpcMap.set(vpcItem.name, vpcId);
       // Set subnet IDs
       for (const subnetItem of vpcItem.subnets ?? []) {
         const subnetId = cdk.aws_ssm.StringParameter.valueForStringParameter(
           this,
-          `/accelerator/network/vpc/${vpcItem.name}/subnet/${subnetItem.name}/id`,
+          this.getSsmPath(SsmResourceType.SUBNET, [vpcItem.name, subnetItem.name]),
         );
         subnetMap.set(`${vpcItem.name}_${subnetItem.name}`, subnetId);
       }
@@ -221,7 +226,7 @@ export class ApplicationsStack extends AcceleratorStack {
       for (const securityGroupItem of vpcItem.securityGroups ?? []) {
         const securityGroupId = cdk.aws_ssm.StringParameter.valueForStringParameter(
           this,
-          `/accelerator/network/vpc/${vpcItem.name}/securityGroup/${securityGroupItem.name}/id`,
+          this.getSsmPath(SsmResourceType.SECURITY_GROUP, [vpcItem.name, securityGroupItem.name]),
         );
         securityGroupMap.set(`${vpcItem.name}_${securityGroupItem.name}`, securityGroupId);
       }
@@ -231,63 +236,70 @@ export class ApplicationsStack extends AcceleratorStack {
 
   private createApplicationConfigResources(
     appConfigItem: AppConfigItem,
-    securityGroupMap: Map<string, string>,
-    subnetMap: Map<string, string>,
-    vpcMap: Map<string, string>,
+    maps: { securityGroupMap: Map<string, string>; subnetMap: Map<string, string>; vpcMap: Map<string, string> },
     configDirPath: string,
     allVpcItems: (VpcConfig | VpcTemplatesConfig)[],
     accessLogsBucket: string,
+    lambdaKey: cdk.aws_kms.IKey,
+    cloudwatch: { key: cdk.aws_kms.IKey; logRetentionInDays: number },
   ) {
     for (const vpcItem of allVpcItems) {
       if (vpcItem.name === appConfigItem.vpc) {
         // Get account IDs
         const vpcAccountIds = this.getVpcAccountIds(vpcItem);
-
         if (vpcAccountIds.includes(cdk.Stack.of(this).account) && vpcItem.region === cdk.Stack.of(this).region) {
           // Create target group resource
           const targetGroups = this.createTargetGroup(
             appConfigItem.targetGroups ?? undefined,
-            vpcMap,
+            maps.vpcMap,
             appConfigItem.vpc,
             appConfigItem.name,
           )!;
+
           // Create network load balancer resource
           this.createNetworkLoadBalancer(
             appConfigItem.networkLoadBalancer ?? undefined,
             appConfigItem.name,
             appConfigItem.vpc,
             targetGroups,
-            subnetMap,
+            maps.subnetMap,
             accessLogsBucket,
           );
+
           // Create application load balancer resource
           this.createApplicationLoadBalancer(
             appConfigItem.applicationLoadBalancer ?? undefined,
             appConfigItem.vpc,
             appConfigItem.name,
             targetGroups,
-            securityGroupMap,
-            subnetMap,
+            maps.securityGroupMap,
+            maps.subnetMap,
             accessLogsBucket,
           );
+
           // create launch template resource
           const lt = this.createLaunchTemplate(
             appConfigItem.launchTemplate,
             appConfigItem.vpc,
             appConfigItem.name,
-            securityGroupMap,
-            subnetMap,
+            maps.securityGroupMap,
+            maps.subnetMap,
             configDirPath,
           );
           // create autoscaling group resource only if launch template and autoscaling are defined
+
           if (lt && appConfigItem.autoscaling) {
             this.createAutoScalingGroup(
-              appConfigItem.autoscaling,
-              appConfigItem.vpc,
-              appConfigItem.name,
+              {
+                autoscaling: appConfigItem.autoscaling,
+                vpcName: appConfigItem.vpc,
+                name: appConfigItem.name,
+              },
               targetGroups,
               lt,
-              subnetMap,
+              maps.subnetMap,
+              lambdaKey,
+              { key: cloudwatch.key, logRetentionInDays: cloudwatch.logRetentionInDays },
             );
           }
         }
@@ -319,6 +331,7 @@ export class ApplicationsStack extends AcceleratorStack {
       }
       return new ApplicationLoadBalancer(this, `ApplicationLoadBalancer_${appName}`, {
         name: applicationLoadBalancer.name,
+        ssmPrefix: this.props.prefixes.ssmParamName,
         subnets,
         securityGroups: getSecurityGroups!,
         scheme: applicationLoadBalancer.scheme! ?? 'internal',
@@ -432,18 +445,18 @@ export class ApplicationsStack extends AcceleratorStack {
   }
 
   private createAutoScalingGroup(
-    autoscaling: AutoScalingConfig,
-    vpcName: string,
-    appName: string,
+    appConfigItem: { autoscaling: AutoScalingConfig; vpcName: string; name: string },
     targetGroupsInput: TargetGroupItem[] | undefined,
     lt: LaunchTemplate,
     subnetMap: Map<string, string>,
+    lambdaKey: cdk.aws_kms.IKey,
+    cloudwatch: { key: cdk.aws_kms.IKey; logRetentionInDays: number },
   ) {
     let finalTargetGroupArns: string[] = [];
     // if input array is provided filter out targetGroup based on name
     if (targetGroupsInput) {
       const filteredTargetGroups = targetGroupsInput.filter(obj => {
-        if (autoscaling.targetGroups?.includes(obj.name)) {
+        if (appConfigItem.autoscaling.targetGroups?.includes(obj.name)) {
           return obj;
         } else {
           return undefined;
@@ -466,42 +479,95 @@ export class ApplicationsStack extends AcceleratorStack {
     }
 
     const subnets: string[] = [];
-    for (const subnet of autoscaling.subnets ?? []) {
-      const subnetId = subnetMap.get(`${vpcName}_${subnet}`);
+    for (const subnet of appConfigItem.autoscaling.subnets ?? []) {
+      const subnetId = subnetMap.get(`${appConfigItem.vpcName}_${subnet}`);
       if (!subnetId) {
         throw new Error(
-          `[customizations-application-stack] Create Autoscaling Groups: subnet ${subnet} not found in VPC ${vpcName}`,
+          `[customizations-application-stack] Create Autoscaling Groups: subnet ${subnet} not found in VPC ${appConfigItem.vpcName}`,
         );
       }
       subnets.push(subnetId);
     }
-
-    const asg = new AutoscalingGroup(this, `AutoScalingGroup${pascalCase(appName)}${pascalCase(autoscaling.name)}`, {
-      name: autoscaling.name,
-      minSize: autoscaling.minSize,
-      maxSize: autoscaling.maxSize,
-      desiredSize: autoscaling.desiredSize,
-      launchTemplateVersion: lt.version,
-      launchTemplateId: lt.launchTemplateId,
-      healthCheckGracePeriod: autoscaling.healthCheckGracePeriod ?? undefined,
-      healthCheckType: autoscaling.healthCheckType ?? undefined,
-      targetGroups: finalTargetGroups,
-      subnets,
-      lambdaKey: this.lambdaKey,
-      cloudWatchLogKmsKey: this.cloudwatchKey,
-      cloudWatchLogRetentionInDays: this.props.globalConfig.cloudwatchLogRetentionInDays,
-    });
-
-    NagSuppressions.addResourceSuppressionsByPath(
+    const cloudWatchLogKmsKey = cloudwatch.key;
+    const cloudWatchLogRetentionInDays = cloudwatch.logRetentionInDays;
+    const asg = new AutoscalingGroup(
       this,
-      `${this.stackName}/AutoScalingGroup${pascalCase(appName)}${pascalCase(autoscaling.name)}/Resource`,
-      [
+      `AutoScalingGroup${pascalCase(appConfigItem.name)}${pascalCase(appConfigItem.autoscaling.name)}`,
+      {
+        name: appConfigItem.autoscaling.name,
+        minSize: appConfigItem.autoscaling.minSize,
+        maxSize: appConfigItem.autoscaling.maxSize,
+        desiredSize: appConfigItem.autoscaling.desiredSize,
+        launchTemplateVersion: lt.version,
+        launchTemplateId: lt.launchTemplateId,
+        healthCheckGracePeriod: appConfigItem.autoscaling.healthCheckGracePeriod ?? undefined,
+        healthCheckType: appConfigItem.autoscaling.healthCheckType ?? undefined,
+        targetGroups: finalTargetGroups,
+        subnets,
+        lambdaKey,
+        cloudWatchLogKmsKey,
+        cloudWatchLogRetentionInDays,
+      },
+    );
+
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.AS3,
+      details: [
         {
-          id: 'AwsSolutions-AS3',
+          path: `${this.stackName}/AutoScalingGroup${pascalCase(appConfigItem.name)}${pascalCase(
+            appConfigItem.autoscaling.name,
+          )}/Resource`,
           reason: 'Scaling policies are not offered as a part of this solution',
         },
       ],
-    );
+    });
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM4,
+      details: [
+        {
+          path: `${this.stackName}/AutoScalingGroup${pascalCase(appConfigItem.name)}${pascalCase(
+            appConfigItem.autoscaling.name,
+          )}/AutoScalingServiceLinkedRole/CreateServiceLinkedRoleFunction/ServiceRole/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM5,
+      details: [
+        {
+          path: `${this.stackName}/AutoScalingGroup${pascalCase(appConfigItem.name)}${pascalCase(
+            appConfigItem.autoscaling.name,
+          )}/AutoScalingServiceLinkedRole/CreateServiceLinkedRoleFunction/ServiceRole/DefaultPolicy/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM4,
+      details: [
+        {
+          path: `${this.stackName}/AutoScalingGroup${pascalCase(appConfigItem.name)}${pascalCase(
+            appConfigItem.autoscaling.name,
+          )}/AutoScalingServiceLinkedRole/CreateServiceLinkedRoleProvider/framework-onEvent/ServiceRole/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM5,
+      details: [
+        {
+          path: `${this.stackName}/AutoScalingGroup${pascalCase(appConfigItem.name)}${pascalCase(
+            appConfigItem.autoscaling.name,
+          )}/AutoScalingServiceLinkedRole/CreateServiceLinkedRoleProvider/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+
     return asg;
   }
 
@@ -524,6 +590,7 @@ export class ApplicationsStack extends AcceleratorStack {
       }
       const nlb = new NetworkLoadBalancer(this, pascalCase(`AppNlb${appName}${networkLoadBalancer.name}`), {
         name: networkLoadBalancer.name,
+        ssmPrefix: this.props.prefixes.ssmParamName,
         appName: appName,
         vpcName: vpcName,
         subnets: subnets,
@@ -577,7 +644,10 @@ export class ApplicationsStack extends AcceleratorStack {
       if (certificate.match('\\arn:*')) {
         return certificate;
       } else {
-        return cdk.aws_ssm.StringParameter.valueForStringParameter(this, `/accelerator/acm/${certificate}/arn`);
+        return cdk.aws_ssm.StringParameter.valueForStringParameter(
+          this,
+          this.getSsmPath(SsmResourceType.ACM_CERT, [certificate]),
+        );
       }
     }
     return undefined;
@@ -646,7 +716,7 @@ export class ApplicationsStack extends AcceleratorStack {
 
         this.ssmParameters.push({
           logicalId: pascalCase(`SsmTg${appName}${vpcName}${targetGroup.name}Arn`),
-          parameterName: `/accelerator/application/targetGroup/${appName}/${vpcName}/${targetGroup.name}/arn`,
+          parameterName: this.getSsmPath(SsmResourceType.TARGET_GROUP, [appName, vpcName, targetGroup.name]),
           stringValue: tg.targetGroupArn,
         });
       }

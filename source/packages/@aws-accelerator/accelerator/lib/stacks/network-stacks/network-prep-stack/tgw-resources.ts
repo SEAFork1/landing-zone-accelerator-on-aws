@@ -11,7 +11,7 @@
  *  and limitations under the License.
  */
 
-import { TransitGatewayConfig } from '@aws-accelerator/config';
+import { AseaResourceType, TransitGatewayConfig } from '@aws-accelerator/config';
 import { TransitGateway, TransitGatewayRouteTable } from '@aws-accelerator/constructs';
 import { SsmResourceType } from '@aws-accelerator/utils';
 import * as cdk from 'aws-cdk-lib';
@@ -59,43 +59,68 @@ export class TgwResources {
    */
   private createTransitGatewayItem(tgwItem: TransitGatewayConfig): TransitGateway {
     this.stack.addLogs(LogLevel.INFO, `Add Transit Gateway ${tgwItem.name}`);
-    // Create TGW
-    const tgw = new TransitGateway(this.stack, pascalCase(`${tgwItem.name}TransitGateway`), {
-      name: tgwItem.name,
-      amazonSideAsn: tgwItem.asn,
-      autoAcceptSharedAttachments: tgwItem.autoAcceptSharingAttachments,
-      defaultRouteTableAssociation: tgwItem.defaultRouteTableAssociation,
-      defaultRouteTablePropagation: tgwItem.defaultRouteTablePropagation,
-      dnsSupport: tgwItem.dnsSupport,
-      vpnEcmpSupport: tgwItem.vpnEcmpSupport,
-      tags: tgwItem.tags,
-    });
+    let tgw;
+    if (this.stack.isManagedByAsea(AseaResourceType.TRANSIT_GATEWAY, tgwItem.name)) {
+      const tgwId = this.stack.getExternalResourceParameter(this.stack.getSsmPath(SsmResourceType.TGW, [tgwItem.name]));
+      tgw = TransitGateway.fromTransitGatewayAttributes(this.stack, pascalCase(`${tgwItem.name}TransitGateway`), {
+        transitGatewayId: tgwId,
+        transitGatewayName: tgwItem.name,
+      });
+    } else {
+      // Create TGW
+      tgw = new TransitGateway(this.stack, pascalCase(`${tgwItem.name}TransitGateway`), {
+        name: tgwItem.name,
+        amazonSideAsn: tgwItem.asn,
+        autoAcceptSharedAttachments: tgwItem.autoAcceptSharingAttachments,
+        defaultRouteTableAssociation: tgwItem.defaultRouteTableAssociation,
+        defaultRouteTablePropagation: tgwItem.defaultRouteTablePropagation,
+        dnsSupport: tgwItem.dnsSupport,
+        vpnEcmpSupport: tgwItem.vpnEcmpSupport,
+        tags: tgwItem.tags,
+      });
 
-    this.stack.addSsmParameter({
-      logicalId: pascalCase(`SsmParam${tgwItem.name}TransitGatewayId`),
-      parameterName: this.stack.getSsmPath(SsmResourceType.TGW, [tgwItem.name]),
-      stringValue: tgw.transitGatewayId,
-    });
+      this.stack.addSsmParameter({
+        logicalId: pascalCase(`SsmParam${tgwItem.name}TransitGatewayId`),
+        parameterName: this.stack.getSsmPath(SsmResourceType.TGW, [tgwItem.name]),
+        stringValue: tgw.transitGatewayId,
+      });
+    }
 
     // Creaet TGW route tables
     for (const routeTableItem of tgwItem.routeTables ?? []) {
       this.stack.addLogs(LogLevel.INFO, `Add Transit Gateway Route Table ${routeTableItem.name}`);
+      let routeTable;
+      if (
+        this.stack.isManagedByAsea(
+          AseaResourceType.TRANSIT_GATEWAY_ROUTE_TABLE,
+          `${tgwItem.name}/${routeTableItem.name}`,
+        )
+      ) {
+        const routeTableId = this.stack.getExternalResourceParameter(
+          this.stack.getSsmPath(SsmResourceType.TGW_ROUTE_TABLE, [tgwItem.name, routeTableItem.name]),
+        );
+        routeTable = TransitGatewayRouteTable.fromRouteTableId(
+          this.stack,
+          pascalCase(`${routeTableItem.name}TransitGatewayRouteTable`),
+          routeTableId,
+        );
+      } else {
+        routeTable = new TransitGatewayRouteTable(
+          this.stack,
+          pascalCase(`${routeTableItem.name}TransitGatewayRouteTable`),
+          {
+            transitGatewayId: tgw.transitGatewayId,
+            name: routeTableItem.name,
+            tags: routeTableItem.tags,
+          },
+        );
 
-      const routeTable = new TransitGatewayRouteTable(
-        this.stack,
-        pascalCase(`${routeTableItem.name}TransitGatewayRouteTable`),
-        {
-          transitGatewayId: tgw.transitGatewayId,
-          name: routeTableItem.name,
-          tags: routeTableItem.tags,
-        },
-      );
-
-      this.stack.addSsmParameter({
-        logicalId: pascalCase(`SsmParam${tgwItem.name}${routeTableItem.name}TransitGatewayRouteTableId`),
-        parameterName: this.stack.getSsmPath(SsmResourceType.TGW_ROUTE_TABLE, [tgwItem.name, routeTableItem.name]),
-        stringValue: routeTable.id,
-      });
+        this.stack.addSsmParameter({
+          logicalId: pascalCase(`SsmParam${tgwItem.name}${routeTableItem.name}TransitGatewayRouteTableId`),
+          parameterName: this.stack.getSsmPath(SsmResourceType.TGW_ROUTE_TABLE, [tgwItem.name, routeTableItem.name]),
+          stringValue: routeTable.id,
+        });
+      }
     }
 
     if (tgwItem.shareTargets) {

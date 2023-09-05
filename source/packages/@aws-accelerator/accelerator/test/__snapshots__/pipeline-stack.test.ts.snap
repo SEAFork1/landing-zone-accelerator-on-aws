@@ -914,6 +914,7 @@ exports[`PipelineStack Construct(PipelineStack):  Snapshot Test 1`] = `
         "KmsKeyArn": {
           "Ref": "SsmParameterValueacceleratorawsacceleratorinstallerkmskeyarnC96584B6F00A464EAD1953AFF4B05118Parameter",
         },
+        "MemorySize": 256,
         "Role": {
           "Fn::GetAtt": [
             "PipelineAWSServiceRoleForCodeStarNotificationsCreateServiceLinkedRoleFunctionServiceRoleD177D2D7",
@@ -1040,7 +1041,7 @@ exports[`PipelineStack Construct(PipelineStack):  Snapshot Test 1`] = `
             "Arn",
           ],
         },
-        "Runtime": "nodejs14.x",
+        "Runtime": "nodejs18.x",
         "Timeout": 900,
       },
       "Type": "AWS::Lambda::Function",
@@ -1406,7 +1407,6 @@ exports[`PipelineStack Construct(PipelineStack):  Snapshot Test 1`] = `
                 },
                 "\\" = \\"aws-cn\\" ]; then\\n                  sed -i \\"s#registry.yarnpkg.com#registry.npmmirror.com#g\\" yarn.lock;\\n                  yarn config set registry https://registry.npmmirror.com\\n               fi",
         "yarn install",
-        "yarn lerna link",
         "yarn build",
         "yarn validate-config $CODEBUILD_SRC_DIR_Config"
       ]
@@ -1428,6 +1428,16 @@ exports[`PipelineStack Construct(PipelineStack):  Snapshot Test 1`] = `
       "Type": "AWS::CodeBuild::Project",
     },
     "PipelineBuildRoleDC686070": {
+      "Metadata": {
+        "cdk_nag": {
+          "rules_to_suppress": [
+            {
+              "id": "AwsSolutions-IAM4",
+              "reason": "AWS Managed policy for External Pipeline Deployment Lookups attached.",
+            },
+          ],
+        },
+      },
       "Properties": {
         "AssumeRolePolicyDocument": {
           "Statement": [
@@ -1441,6 +1451,11 @@ exports[`PipelineStack Construct(PipelineStack):  Snapshot Test 1`] = `
           ],
           "Version": "2012-10-17",
         },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "PipelineValidateConfigPolicyDocument5A45073D",
+          },
+        ],
       },
       "Type": "AWS::IAM::Role",
     },
@@ -2424,11 +2439,31 @@ exports[`PipelineStack Construct(PipelineStack):  Snapshot Test 1`] = `
       },
       "Type": "AWS::CodeBuild::Project",
     },
+    "PipelineValidateConfigPolicyDocument5A45073D": {
+      "Properties": {
+        "Description": "",
+        "Path": "/",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "organizations:ListAccounts",
+                "ssm:GetParameter",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+      },
+      "Type": "AWS::IAM::ManagedPolicy",
+    },
     "SsmParamAcceleratorVersionFF83282D": {
       "Properties": {
         "Name": "/accelerator/PipelineStack/version",
         "Type": "String",
-        "Value": "1.4.3",
+        "Value": "1.4.1",
       },
       "Type": "AWS::SSM::Parameter",
     },

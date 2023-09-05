@@ -10,9 +10,12 @@
  *  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
  *  and limitations under the License.
  */
+import { ShareTargets } from '../../lib/common-types';
+import { ApplicationLoadBalancerConfig } from '../../lib/customizations-config';
 import {
   NetworkConfig,
   NetworkConfigTypes,
+  NfwFirewallConfig,
   ResolverRuleConfig,
   RouteTableEntryConfig,
   SecurityGroupConfig,
@@ -210,7 +213,7 @@ export class VpcValidator {
     // Validate route tables names
     this.validateRouteTableNames(vpcItem, helpers, errors);
     // Validate route entries
-    this.validateRouteTableEntries(values, vpcItem, errors);
+    this.validateRouteTableEntries(values, vpcItem, helpers, errors);
   }
 
   /**
@@ -259,36 +262,71 @@ export class VpcValidator {
   private validateRouteEntryDestination(
     routeTableEntryItem: RouteTableEntryConfig,
     routeTableName: string,
-    vpcName: string,
+    vpcItem: VpcConfig | VpcTemplatesConfig,
     values: NetworkConfig,
+    helpers: NetworkValidatorFunctions,
     errors: string[],
   ) {
     if (routeTableEntryItem.destinationPrefixList) {
       // Check if a CIDR destination is also defined
       if (routeTableEntryItem.destination) {
         errors.push(
-          `[Route table ${routeTableName} for VPC ${vpcName}]: route entry ${routeTableEntryItem.name} using destination and destinationPrefixList. Please choose only one destination type`,
+          `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} using destination and destinationPrefixList. Please choose only one destination type`,
         );
       }
 
       // Throw error if network firewall or GWLB are the target
       if (['networkFirewall', 'gatewayLoadBalancerEndpoint'].includes(routeTableEntryItem.type!)) {
         errors.push(
-          `[Route table ${routeTableName} for VPC ${vpcName}]: route entry ${routeTableEntryItem.name} with type ${routeTableEntryItem.type} does not support destinationPrefixList`,
+          `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} with type ${routeTableEntryItem.type} does not support destinationPrefixList`,
         );
       }
 
       // Throw error if prefix list doesn't exist
       if (!values.prefixLists?.find(item => item.name === routeTableEntryItem.destinationPrefixList)) {
         errors.push(
-          `[Route table ${routeTableName} for VPC ${vpcName}]: route entry ${routeTableEntryItem.name} destinationPrefixList ${routeTableEntryItem.destinationPrefixList} does not exist`,
+          `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} destinationPrefixList ${routeTableEntryItem.destinationPrefixList} does not exist`,
         );
       }
     } else {
-      if (!routeTableEntryItem.destination) {
-        errors.push(
-          `[Route table ${routeTableName} for VPC ${vpcName}]: route entry ${routeTableEntryItem.name} does not have a destination defined`,
-        );
+      // Validate the destination CIDR or subnet
+      this.validateRouteEntryDestinationCidr(routeTableEntryItem, routeTableName, vpcItem, helpers, errors);
+    }
+  }
+
+  /**
+   * Validate route entry destination CIDR or subnet reference is valid
+   * @param routeTableEntryItem
+   * @param routeTableName
+   * @param vpcItem
+   * @param helpers
+   * @param errors
+   */
+  private validateRouteEntryDestinationCidr(
+    routeTableEntryItem: RouteTableEntryConfig,
+    routeTableName: string,
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
+    if (!routeTableEntryItem.destination) {
+      errors.push(
+        `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} does not have a destination defined`,
+      );
+    } else {
+      if (!helpers.isValidIpv4Cidr(routeTableEntryItem.destination)) {
+        // Check if subnet exists in the VPC
+        if (!helpers.getSubnet(vpcItem, routeTableEntryItem.destination)) {
+          errors.push(
+            `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} destination "${routeTableEntryItem.destination}" is not a valid CIDR or subnet name`,
+          );
+        }
+        // Validate target type
+        if (!['natGateway', 'networkFirewall', 'gatewayLoadBalancerEndpoint'].includes(routeTableEntryItem.type!)) {
+          errors.push(
+            `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} destination "${routeTableEntryItem.destination}" is not valid. Route entry type ${routeTableEntryItem.type} does not support dynamic subnet destinations`,
+          );
+        }
       }
     }
   }
@@ -337,16 +375,19 @@ export class VpcValidator {
    * @param routeTableName
    * @param vpcItem
    * @param values
+   * @param helpers
+   * @param errors
    */
   private validateRouteEntryTarget(
     routeTableEntryItem: RouteTableEntryConfig,
     routeTableName: string,
     vpcItem: VpcConfig | VpcTemplatesConfig,
     values: NetworkConfig,
+    helpers: NetworkValidatorFunctions,
     errors: string[],
   ) {
     const gwlbs = values.centralNetworkServices?.gatewayLoadBalancers;
-    const networkFirewalls = values.centralNetworkServices?.networkFirewall?.firewalls;
+    const networkFirewalls = values.centralNetworkServices?.networkFirewall?.firewalls ?? [];
     const tgws = values.transitGateways;
     const vpcs = [...values.vpcs, ...(values.vpcTemplates ?? [])];
     const vpcPeers = values.vpcPeering;
@@ -368,22 +409,9 @@ export class VpcValidator {
       );
     }
 
-    // Throw error if network firewall endpoint doesn't exist
-    if (
-      routeTableEntryItem.type === 'networkFirewall' &&
-      !networkFirewalls?.find(item => item.name === routeTableEntryItem.target)
-    ) {
-      errors.push(
-        `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} target ${routeTableEntryItem.target} does not exist`,
-      );
-    }
-
-    // Throw error if network firewall target AZ doesn't exist
-    if (routeTableEntryItem.type === 'networkFirewall' && !routeTableEntryItem.targetAvailabilityZone) {
-      errors.push(
-        `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} with type networkFirewall must include targetAvailabilityZone`,
-      );
-    }
+    //
+    // Validate network firewall route entry
+    this.validateNfwRouteEntry(routeTableEntryItem, routeTableName, vpcItem, networkFirewalls, helpers, errors);
 
     // Throw error if NAT gateway doesn't exist
     if (
@@ -417,14 +445,20 @@ export class VpcValidator {
    * Validate route table entries
    * @param values
    * @param vpcItem
+   * @param helpers
    * @param errors
    */
-  private validateRouteTableEntries(values: NetworkConfig, vpcItem: VpcConfig | VpcTemplatesConfig, errors: string[]) {
+  private validateRouteTableEntries(
+    values: NetworkConfig,
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
     vpcItem.routeTables?.forEach(routeTableItem => {
       routeTableItem.routes?.forEach(entry => {
         // Validate destination exists
         if (entry.type && entry.type !== 'gatewayEndpoint') {
-          this.validateRouteEntryDestination(entry, routeTableItem.name, vpcItem.name, values, errors);
+          this.validateRouteEntryDestination(entry, routeTableItem.name, vpcItem, values, helpers, errors);
         }
 
         // Validate IGW route
@@ -444,10 +478,110 @@ export class VpcValidator {
             entry.type,
           )
         ) {
-          this.validateRouteEntryTarget(entry, routeTableItem.name, vpcItem, values, errors);
+          this.validateRouteEntryTarget(entry, routeTableItem.name, vpcItem, values, helpers, errors);
         }
       });
     });
+  }
+
+  /**
+   * Validate network firewall route entry
+   * @param routeTableEntryItem
+   * @param routeTableName
+   * @param vpcItem
+   * @param networkFirewalls
+   * @param helpers
+   * @param errors
+   */
+  private validateNfwRouteEntry(
+    routeTableEntryItem: RouteTableEntryConfig,
+    routeTableName: string,
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    networkFirewalls: NfwFirewallConfig[],
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
+    //
+    // Validate network firewall target exists
+    if (routeTableEntryItem.type === 'networkFirewall') {
+      const nfwTarget = networkFirewalls.find(item => item.name === routeTableEntryItem.target);
+      if (!nfwTarget) {
+        errors.push(
+          `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} target Network Firewall "${routeTableEntryItem.target}" does not exist in network-config.yaml`,
+        );
+      } else {
+        if (nfwTarget.vpc !== vpcItem.name) {
+          errors.push(
+            `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} target Network Firewall "${routeTableEntryItem.target}" must be deployed to the same VPC as the route table. Configured VPC target: ${nfwTarget.vpc}`,
+          );
+        } else {
+          //
+          // Validate target AZ exists
+          this.validateNfwRouteEntryTarget(routeTableEntryItem, routeTableName, vpcItem, nfwTarget, helpers, errors);
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate network firewall route entry AZ target
+   * @param routeTableEntryItem
+   * @param routeTableName
+   * @param vpcItem
+   * @param nfwTarget
+   * @param helpers
+   * @param errors
+   */
+  private validateNfwRouteEntryTarget(
+    routeTableEntryItem: RouteTableEntryConfig,
+    routeTableName: string,
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    nfwTarget: NfwFirewallConfig,
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
+    const endpointAzs: (string | number)[] = [];
+    //
+    // Get subnet availability zones
+    nfwTarget.subnets.forEach(subnetItem => {
+      const subnet = helpers.getSubnet(vpcItem, subnetItem);
+      if (subnet && subnet.availabilityZone) {
+        endpointAzs.push(subnet.availabilityZone);
+      }
+    });
+    //
+    // Throw error if network firewall target AZ doesn't exist
+    if (!routeTableEntryItem.targetAvailabilityZone) {
+      errors.push(
+        `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} with type networkFirewall must include targetAvailabilityZone`,
+      );
+    } else {
+      //
+      // Validate AZ is correct format
+      if (
+        typeof routeTableEntryItem.targetAvailabilityZone === 'string' &&
+        !helpers.matchesRegex(routeTableEntryItem.targetAvailabilityZone, '^[a-z]{1}$')
+      ) {
+        errors.push(
+          `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} target AZ "${routeTableEntryItem.targetAvailabilityZone}" is not in the correct format. AZ must be a single alphanumeric character.`,
+        );
+      }
+      if (
+        typeof routeTableEntryItem.targetAvailabilityZone === 'number' &&
+        !helpers.matchesRegex(routeTableEntryItem.targetAvailabilityZone.toString(), '^[0-9]{1}$')
+      ) {
+        errors.push(
+          `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} target AZ "${routeTableEntryItem.targetAvailabilityZone}" is not in the correct format. AZ must be a single alphanumeric character.`,
+        );
+      }
+      //
+      // Validate endpoint AZ exists
+      if (!endpointAzs.includes(routeTableEntryItem.targetAvailabilityZone)) {
+        errors.push(
+          `[Route table ${routeTableName} for VPC ${vpcItem.name}]: route entry ${routeTableEntryItem.name} target AZ "${routeTableEntryItem.targetAvailabilityZone}" does not exist for Network Firewall "${routeTableEntryItem.target}". Configured AZs: ${endpointAzs}`,
+        );
+      }
+    }
   }
 
   /**
@@ -572,6 +706,10 @@ export class VpcValidator {
         // Validate transit gateway attachments
         //
         this.validateTgwAttachments(values, vpcItem, helpers, errors);
+        //
+        // Validate ACM shared targets
+        //
+        this.validateAcmSharesToAlbShares(values, vpcItem, helpers, errors);
       }
     });
   }
@@ -838,7 +976,7 @@ export class VpcValidator {
     }
 
     // Validate subnets
-    const azs: string[] = [];
+    const azs: (string | number)[] = [];
     vpcItem.interfaceEndpoints?.subnets.forEach(subnetName => {
       const subnet = helpers.getSubnet(vpcItem, subnetName);
       if (!subnet) {
@@ -1944,6 +2082,7 @@ export class VpcValidator {
 
   /**
    * Validate subnets for a given VPC
+   * @param values
    * @param vpcItem
    * @param helpers
    * @param errors
@@ -1961,6 +2100,12 @@ export class VpcValidator {
     this.validateSubnetCidrs(vpcItem, helpers, errors);
     // Validate subnet route table
     this.validateSubnetRouteTables(vpcItem, errors);
+    // Validate subnet availability zones
+    this.validateSubnetAvailabilityZones(vpcItem, helpers, errors);
+    // Validate subnets exist in VPC that are used with Application Load Balancer
+    this.validateAlbConfigForExistingSubnets(vpcItem, helpers, errors);
+    // Validate that Application Load Balancer that is using shared targets is using subnets that are using shared target.
+    this.validateSharedAlbSubnets(vpcItem, helpers, errors);
   }
 
   /**
@@ -2047,6 +2192,7 @@ export class VpcValidator {
   /**
    * Validate subnet route table associations
    * @param vpcItem
+   * @param helpers
    * @param errors
    */
   private validateSubnetRouteTables(vpcItem: VpcConfig | VpcTemplatesConfig, errors: string[]) {
@@ -2054,12 +2200,236 @@ export class VpcValidator {
     vpcItem.routeTables?.forEach(routeTable => tableNames.push(routeTable.name));
 
     vpcItem.subnets?.forEach(subnet => {
-      if (!tableNames.includes(subnet.routeTable)) {
+      if (subnet.routeTable && !tableNames.includes(subnet.routeTable)) {
         errors.push(
           `[VPC ${vpcItem.name} subnet ${subnet.name}]: route table "${subnet.routeTable}" does not exist in the VPC`,
         );
       }
     });
+  }
+
+  /**
+   * Validate subnet availability zones
+   * @param vpcItem
+   * @param helps
+   * @param errors
+   */
+  private validateSubnetAvailabilityZones(
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
+    vpcItem.subnets?.forEach(subnet => {
+      if (typeof subnet.availabilityZone === 'string') {
+        if (!helpers.matchesRegex(subnet.availabilityZone, '^[a-z]{1}$')) {
+          errors.push(
+            `[VPC ${vpcItem.name} subnet ${subnet.name}]: Uses an incorrect value for ${subnet.availabilityZone} as the availabilityZone. Please use a single lowercase letter.`,
+          );
+        }
+      }
+      if (typeof subnet.availabilityZone === 'number') {
+        if (!helpers.matchesRegex(subnet.availabilityZone.toString(), '^[0-9]{1}$')) {
+          errors.push(
+            `[VPC ${vpcItem.name} subnet ${subnet.name}]: Uses an incorrect value for ${subnet.availabilityZone} as the availabilityZone. Please use a single number.`,
+          );
+        }
+      }
+    });
+  }
+
+  /**
+   * Validate that subnet specified in ALB exists
+   * @param vpcItem
+   * @param helpers
+   * @param errors
+   */
+  private validateAlbConfigForExistingSubnets(
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
+    for (const albItem of vpcItem.loadBalancers?.applicationLoadBalancers ?? []) {
+      for (const subnetItem of albItem.subnets) {
+        if (!helpers.getSubnet(vpcItem, subnetItem)) {
+          errors.push(
+            `The Application Load Balancer: ${albItem.name} for VPC ${vpcItem.name} is using subnet ${subnetItem} that doesn't exist`,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate that ALB that is using sharedTargets has subnets that are also using shared targets method.
+   * @param values
+   * @param errors
+   */
+  private validateSharedAlbSubnets(
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
+    let nonSharedSubnets: string[] = [];
+    let invalidAlbs: { name: string; subnets: string[] }[] = [];
+    for (const subnetItem of vpcItem.subnets ?? []) {
+      if (!subnetItem.shareTargets) {
+        nonSharedSubnets.push(subnetItem.name);
+      }
+    }
+    for (const albItem of vpcItem.loadBalancers?.applicationLoadBalancers ?? []) {
+      if (albItem.shareTargets) {
+        this.validateSubnetSharesToAlbShares(albItem, vpcItem, helpers, errors);
+        this.validateTargetGroupSharesToAlbShares(albItem, vpcItem, helpers, errors);
+        if (albItem.subnets.find(item => nonSharedSubnets.find(nonSharedSubnet => item === nonSharedSubnet))) {
+          invalidAlbs.push({ name: albItem.name, subnets: albItem.subnets });
+        }
+      }
+    }
+
+    for (const alb of invalidAlbs) {
+      errors.push(
+        `The Application Load Balancer: ${
+          alb.name
+        } is using the sharedTargets method, but at least one of the subnets [${alb.subnets.join(
+          ',',
+        )}] in its configuration is not using the sharedTargets method.`,
+      );
+    }
+  }
+
+  /**
+   * Validate subnet availability to shared Application Load Balancers
+   * @param vpcItem
+   * @param helpers
+   * @param errors
+   */
+  private validateSubnetSharesToAlbShares(
+    albItem: ApplicationLoadBalancerConfig,
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
+    let missingAccountIds: string[] = [];
+    const albAccounts = helpers.getAccountNamesFromTarget(albItem.shareTargets as ShareTargets);
+    for (const subnetName of albItem.subnets) {
+      const subnetSharedTarget = this.getSubnetSharedTarget(vpcItem, subnetName);
+      if (subnetSharedTarget) {
+        const subnetAccounts = helpers.getAccountNamesFromTarget(subnetSharedTarget);
+        missingAccountIds = albAccounts.filter(item => !subnetAccounts.includes(item));
+        if (missingAccountIds.length > 0) {
+          errors.push(
+            `The Application Load Balancer ${albItem.name} is deployed to multiple accounts and using subnets that aren't available. Please make sure your sharedTargets configuration for your subnet makes the subnet available for the ALB.`,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate target group availability to shared Application Load Balancers
+   * @param vpcItem
+   * @param helpers
+   * @param errors
+   */
+  private validateTargetGroupSharesToAlbShares(
+    albItem: ApplicationLoadBalancerConfig,
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
+    let missingAccountIds: string[] = [];
+
+    const albAccounts = helpers.getAccountNamesFromTarget(albItem.shareTargets as ShareTargets);
+    for (const listenerItem of albItem.listeners ?? []) {
+      for (const targetGroupItem of vpcItem.targetGroups ?? []) {
+        if (targetGroupItem.name === listenerItem.targetGroup) {
+          const targetGroupSharedTarget = this.getTargetGroupSharedTarget(vpcItem, listenerItem.targetGroup);
+          if (targetGroupSharedTarget) {
+            const targetGroupAccounts = helpers.getAccountNamesFromTarget(targetGroupSharedTarget);
+            missingAccountIds = albAccounts.filter(item => !targetGroupAccounts.includes(item));
+            if (missingAccountIds.length > 0) {
+              errors.push(
+                `The Application Load Balancer ${albItem.name} is deployed to multiple accounts and using target group(s) that are not in the same accounts. Please make sure your sharedTargets configuration for your targetGroup makes the Target Group available for the ALB.`,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate ACM availability to shared Application Load Balancers
+   * @param values
+   * @param vpcItem
+   * @param helpers
+   * @param errors
+   */
+  private validateAcmSharesToAlbShares(
+    values: NetworkConfig,
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    helpers: NetworkValidatorFunctions,
+    errors: string[],
+  ) {
+    let invalidAlbList: string[] = [];
+    let missingAccountIds: string[] = [];
+
+    for (const acmItem of values.certificates ?? []) {
+      for (const albItem of vpcItem.loadBalancers?.applicationLoadBalancers ?? []) {
+        if (albItem.shareTargets) {
+          const albAccounts = helpers.getAccountNamesFromTarget(albItem.shareTargets as ShareTargets);
+          for (const listenerItem of albItem.listeners ?? []) {
+            if (listenerItem.certificate === acmItem.name) {
+              const acmAccountIds = helpers.getAccountNamesFromTarget(acmItem.deploymentTargets);
+              missingAccountIds = albAccounts.filter(item => !acmAccountIds.includes(item));
+              if (missingAccountIds.length > 0) {
+                if (!invalidAlbList.includes(albItem.name)) {
+                  invalidAlbList.push(albItem.name);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    for (const alb of invalidAlbList) {
+      errors.push(
+        `The Application Load Balancer ${alb} is deployed to multiple accounts and using ACM certificate(s) that are not in the same accounts. Please make sure your sharedTargets configuration for your ACM certificates makes the Target Group available for the ALB.`,
+      );
+    }
+  }
+
+  /**
+   * Returns the shared targets from the input of the subnet name.
+   * @param vpcItem
+   * @param subnetName
+   * @returns
+   */
+  private getSubnetSharedTarget(vpcItem: VpcConfig | VpcTemplatesConfig, subnetName: string): ShareTargets | undefined {
+    for (const subnetItem of vpcItem.subnets ?? []) {
+      if (subnetItem.name === subnetName) {
+        return subnetItem.shareTargets;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Returns the shared targets from the input of the target group name.
+   * @param vpcItem
+   * @param subnetName
+   * @returns
+   */
+  private getTargetGroupSharedTarget(
+    vpcItem: VpcConfig | VpcTemplatesConfig,
+    targetGroupName: string,
+  ): ShareTargets | undefined {
+    for (const targetGroupItem of vpcItem.targetGroups ?? []) {
+      if (targetGroupItem.name === targetGroupName) {
+        return targetGroupItem.shareTargets;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -2201,7 +2571,7 @@ export class VpcValidator {
     helpers: NetworkValidatorFunctions,
     errors: string[],
   ) {
-    const subnetAzs: string[] = [];
+    const subnetAzs: (string | number)[] = [];
     const subnetNames: string[] = [];
 
     attach.subnets.forEach(subnetName => {

@@ -14,7 +14,7 @@
 import { Construct } from 'constructs';
 
 import { OutpostsConfig, VpcConfig } from '@aws-accelerator/config';
-import { NatGateway, TransitGatewayAttachment } from '@aws-accelerator/constructs';
+import { INatGateway, ITransitGatewayAttachment } from '@aws-accelerator/constructs';
 
 import { AcceleratorStackProps } from '../../accelerator-stack';
 import { NetworkStack } from '../network-stack';
@@ -60,6 +60,7 @@ export class NetworkVpcStack extends NetworkStack {
     // Create subnet resources
     //
     const outpostMap = this.setOutpostsMap(props.networkConfig.vpcs);
+
     const subnetResources = new SubnetResources(
       this,
       vpcResources.vpcMap,
@@ -90,6 +91,7 @@ export class NetworkVpcStack extends NetworkStack {
       routeTableResources.routeTableMap,
       transitGatewayIds,
       tgwResources.tgwAttachmentMap,
+      subnetResources.subnetMap,
       natGatewayResources.natGatewayMap,
       plResources.prefixListMap,
     );
@@ -150,10 +152,10 @@ export class NetworkVpcStack extends NetworkStack {
    * @returns
    */
   public getTgwAttachment(
-    tgwAttachmentMap: Map<string, TransitGatewayAttachment>,
+    tgwAttachmentMap: Map<string, ITransitGatewayAttachment>,
     vpcName: string,
     transitGatewayName: string,
-  ): TransitGatewayAttachment {
+  ): ITransitGatewayAttachment {
     const key = `${vpcName}_${transitGatewayName}`;
 
     if (!tgwAttachmentMap.get(key)) {
@@ -171,7 +173,7 @@ export class NetworkVpcStack extends NetworkStack {
    * @param natGatewayName
    * @returns
    */
-  public getNatGateway(natGatewayMap: Map<string, NatGateway>, vpcName: string, natGatewayName: string): NatGateway {
+  public getNatGateway(natGatewayMap: Map<string, INatGateway>, vpcName: string, natGatewayName: string): INatGateway {
     const key = `${vpcName}_${natGatewayName}`;
 
     if (!natGatewayMap.get(key)) {

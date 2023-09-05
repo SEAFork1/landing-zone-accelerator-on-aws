@@ -12,6 +12,7 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
+import { NagSuppressions } from 'cdk-nag';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as codecommit from 'aws-cdk-lib/aws-codecommit';
 import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
@@ -177,6 +178,8 @@ export class AcceleratorPipeline extends Construct {
       };
     }
 
+    const enableAseaMigration = process.env['ENABLE_ASEA_MIGRATION']?.toLowerCase?.() === 'true';
+
     // Get installer key
     this.installerKey = cdk.aws_kms.Key.fromKeyArn(
       this,
@@ -284,6 +287,56 @@ export class AcceleratorPipeline extends Construct {
       assumedBy: new iam.ServicePrincipal('codebuild.amazonaws.com'),
     });
 
+    const validateConfigPolicyDocument = new cdk.aws_iam.PolicyDocument({
+      statements: [
+        new cdk.aws_iam.PolicyStatement({
+          effect: cdk.aws_iam.Effect.ALLOW,
+          actions: ['organizations:ListAccounts', 'ssm:GetParameter'],
+          resources: ['*'],
+        }),
+      ],
+    });
+
+    const validateConfigPolicy = new cdk.aws_iam.ManagedPolicy(this, 'ValidateConfigPolicyDocument', {
+      document: validateConfigPolicyDocument,
+    });
+    buildRole.addManagedPolicy(validateConfigPolicy);
+
+    if (this.props.managementAccountId && this.props.managementAccountRoleName) {
+      const assumeExternalDeploymentRolePolicyDocument = new cdk.aws_iam.PolicyDocument({
+        statements: [
+          new cdk.aws_iam.PolicyStatement({
+            effect: cdk.aws_iam.Effect.ALLOW,
+            actions: ['sts:AssumeRole'],
+            resources: [
+              `arn:${this.props.partition}:iam::${this.props.managementAccountId}:role/${this.props.managementAccountRoleName}`,
+            ],
+          }),
+        ],
+      });
+
+      /**
+       * Create an IAM Policy for the build role to be able to lookup replacement parameters in the external deployment
+       * target account
+       */
+      const assumeExternalDeploymentRolePolicy = new cdk.aws_iam.ManagedPolicy(this, 'AssumeExternalDeploymentPolicy', {
+        document: assumeExternalDeploymentRolePolicyDocument,
+      });
+      buildRole.addManagedPolicy(assumeExternalDeploymentRolePolicy);
+    }
+
+    // Pipeline/BuildRole/Resource AwsSolutions-IAM4: The IAM user, role, or group uses AWS managed policies.
+    NagSuppressions.addResourceSuppressionsByPath(
+      cdk.Stack.of(this),
+      `${cdk.Stack.of(this).stackName}/Pipeline/BuildRole/Resource`,
+      [
+        {
+          id: 'AwsSolutions-IAM4',
+          reason: 'AWS Managed policy for External Pipeline Deployment Lookups attached.',
+        },
+      ],
+    );
+
     const buildProject = new codebuild.PipelineProject(this, 'BuildProject', {
       projectName: buildProjectName,
       encryptionKey: this.installerKey,
@@ -305,7 +358,6 @@ export class AcceleratorPipeline extends Construct {
                   yarn config set registry https://registry.npmmirror.com
                fi`,
               'yarn install',
-              'yarn lerna link',
               'yarn build',
               'yarn validate-config $CODEBUILD_SRC_DIR_Config',
             ],
@@ -326,6 +378,7 @@ export class AcceleratorPipeline extends Construct {
             value: '--max_old_space_size=8192',
           },
           ...enableSingleAccountModeEnvVariables,
+          ...pipelineAccountEnvVariables,
         },
       },
       cache: codebuild.Cache.local(codebuild.LocalCacheMode.SOURCE),
@@ -488,6 +541,20 @@ export class AcceleratorPipeline extends Construct {
       ],
     });
 
+    // Adds ASEA Import Resources stage
+    if (enableAseaMigration) {
+      this.pipeline.addStage({
+        stageName: 'ImportAseaResources',
+        actions: [
+          this.createToolkitStage({
+            actionName: 'Import_Asea_Resources',
+            command: `deploy`,
+            stage: AcceleratorStage.IMPORT_ASEA_RESOURCES,
+          }),
+        ],
+      });
+    }
+
     this.pipeline.addStage({
       stageName: 'Organization',
       actions: [
@@ -563,6 +630,20 @@ export class AcceleratorPipeline extends Construct {
         }),
       ],
     });
+
+    // Add ASEA Import Resources
+    if (enableAseaMigration) {
+      this.pipeline.addStage({
+        stageName: 'PostImportAseaResources',
+        actions: [
+          this.createToolkitStage({
+            actionName: 'Post_Import_Asea_Resources',
+            command: `deploy`,
+            stage: AcceleratorStage.POST_IMPORT_ASEA_RESOURCES,
+          }),
+        ],
+      });
+    }
 
     // Enable pipeline notification for commercial partition
     this.enablePipelineNotification();

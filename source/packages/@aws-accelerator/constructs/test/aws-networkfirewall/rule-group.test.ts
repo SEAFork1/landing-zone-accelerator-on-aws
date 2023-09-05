@@ -46,7 +46,7 @@ const ruleGroup: NfwRuleGroupRuleConfig = {
     rulesSourceList: undefined,
     statelessRulesAndCustomActions: undefined,
     rulesString: undefined,
-    rulesFile: '../../accelerator/test/configs/all-enabled/firewall-rules/rules.txt',
+    rulesFile: '../../accelerator/test/configs/snapshot-only/firewall-rules/rules.txt',
   },
   ruleVariables: undefined,
   statefulRuleOptions: 'STRICT_ORDER',
@@ -110,7 +110,7 @@ const statelessRule: NfwRuleGroupRuleConfig = {
     rulesSourceList: undefined,
     statefulRules: undefined,
     rulesString: undefined,
-    rulesFile: '../../accelerator/test/configs/all-enabled/firewall-rules/rules.txt',
+    rulesFile: '../../accelerator/test/configs/snapshot-only/firewall-rules/rules.txt',
   },
 
   ruleVariables: {
@@ -133,6 +133,11 @@ new NetworkFirewallRuleGroup(stack, 'TestGroupStateless', {
   type: 'STATELESS',
   ruleGroup: statelessRule,
   tags: [{ key: 'someKey', value: 'someValue' }],
+});
+
+NetworkFirewallRuleGroup.fromAttributes(stack, 'TestImportGroup', {
+  groupArn: 'importedGroupArn',
+  groupName: 'importedGroupName',
 });
 /*
  * Network Firewall construct test

@@ -33,10 +33,14 @@ export interface AutoscalingGroupProps {
   readonly healthCheckType?: string;
   readonly targetGroups?: string[];
   readonly subnets: string[];
+  readonly tags?: cdk.CfnTag[];
   readonly lambdaKey: cdk.aws_kms.IKey;
   readonly cloudWatchLogKmsKey: cdk.aws_kms.IKey;
   readonly cloudWatchLogRetentionInDays: number;
-  readonly tags?: cdk.CfnTag[];
+  /**
+   * Prefix for nag suppression
+   */
+  readonly nagSuppressionPrefix?: string;
 }
 
 export class AutoscalingGroup extends cdk.Resource implements IAutoscalingGroupResource {

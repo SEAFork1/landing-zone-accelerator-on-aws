@@ -10,7 +10,7 @@
  *  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
  *  and limitations under the License.
  */
-import { IPv4, IPv4CidrRange } from 'ip-num';
+import { IPv4, IPv4CidrRange, IPv6, IPv6CidrRange } from 'ip-num';
 import { AccountConfig, GovCloudAccountConfig } from '../../lib/accounts-config';
 import {
   NetworkConfig,
@@ -146,7 +146,7 @@ export class NetworkValidatorFunctions {
    * @param arr
    * @returns
    */
-  public hasDuplicates(arr: string[]): boolean {
+  public hasDuplicates(arr: (string | number)[]): boolean {
     return new Set(arr).size !== arr.length;
   }
 
@@ -213,6 +213,20 @@ export class NetworkValidatorFunctions {
   }
 
   /**
+   * Returns true if valid CIDR is valid
+   * @param cidr
+   * @returns
+   */
+  public isValidIpv6Cidr(cidr: string): boolean {
+    try {
+      IPv6CidrRange.fromCidr(cidr);
+    } catch (e) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Returns true if valid IPv4 address
    * @param ip
    * @returns
@@ -220,6 +234,20 @@ export class NetworkValidatorFunctions {
   public isValidIpv4(ip: string): boolean {
     try {
       IPv4.fromString(ip);
+    } catch (e) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Returns true if valid IPv6 address
+   * @param ip
+   * @returns
+   */
+  public isValidIpv6(ip: string): boolean {
+    try {
+      IPv6.fromString(ip);
     } catch (e) {
       return false;
     }

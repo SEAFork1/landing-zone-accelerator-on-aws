@@ -41,7 +41,15 @@ export interface IpamSubnetProps {
   /**
    * The availability zone (AZ) of the subnet
    */
-  readonly availabilityZone: string;
+  readonly availabilityZone?: string;
+
+  /**
+   * The Physical Availability Zone ID the subnet is located in
+   *
+   * @attribute
+   */
+  readonly availabilityZoneId?: string;
+
   /**
    * The base IPAM pool CIDR range the subnet is assigned to
    */
@@ -174,7 +182,7 @@ export class IpamSubnet extends cdk.Resource implements IIpamSubnet {
       policyStatements: [
         {
           Effect: 'Allow',
-          Action: ['ec2:CreateTags', 'ec2:DeleteSubnet', 'ec2:ModifySubnetAttribute'],
+          Action: ['ec2:CreateTags', 'ec2:DeleteSubnet', 'ec2:DeleteTags', 'ec2:ModifySubnetAttribute'],
           Resource: `arn:${cdk.Aws.PARTITION}:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:subnet/*`,
         },
         {
@@ -209,6 +217,7 @@ export class IpamSubnet extends cdk.Resource implements IIpamSubnet {
       properties: {
         name: props.name,
         availabilityZone: props.availabilityZone,
+        availabilityZoneId: props.availabilityZoneId,
         basePool: props.basePool,
         ipamAllocation: props.ipamAllocation,
         vpcId: props.vpcId,

@@ -3,7 +3,7 @@
 exports[`LaunchTemplate Construct(FirewallAutoScalingGroup):  Snapshot Test 1`] = `
 {
   "Resources": {
-    "CloudWatchKey9B181885": {
+    "CustomKey1E6D0D07": {
       "DeletionPolicy": "Retain",
       "Properties": {
         "KeyPolicy": {
@@ -38,7 +38,7 @@ exports[`LaunchTemplate Construct(FirewallAutoScalingGroup):  Snapshot Test 1`] 
       "Type": "AWS::KMS::Key",
       "UpdateReplacePolicy": "Retain",
     },
-    "LambdaKey984A39D9": {
+    "CustomKeyCloudWatchFB91CD4E": {
       "DeletionPolicy": "Retain",
       "Properties": {
         "KeyPolicy": {
@@ -89,10 +89,11 @@ exports[`LaunchTemplate Construct(FirewallAutoScalingGroup):  Snapshot Test 1`] 
         "Handler": "index.handler",
         "KmsKeyArn": {
           "Fn::GetAtt": [
-            "LambdaKey984A39D9",
+            "CustomKey1E6D0D07",
             "Arn",
           ],
         },
+        "MemorySize": 256,
         "Role": {
           "Fn::GetAtt": [
             "TestFirewallAutoScalingServiceLinkedRoleCreateServiceLinkedRoleFunctionServiceRole82A4BC5E",
@@ -109,7 +110,7 @@ exports[`LaunchTemplate Construct(FirewallAutoScalingGroup):  Snapshot Test 1`] 
       "Properties": {
         "KmsKeyId": {
           "Fn::GetAtt": [
-            "CloudWatchKey9B181885",
+            "CustomKeyCloudWatchFB91CD4E",
             "Arn",
           ],
         },
@@ -214,7 +215,7 @@ exports[`LaunchTemplate Construct(FirewallAutoScalingGroup):  Snapshot Test 1`] 
             "Arn",
           ],
         },
-        "Runtime": "nodejs14.x",
+        "Runtime": "nodejs18.x",
         "Timeout": 900,
       },
       "Type": "AWS::Lambda::Function",
@@ -369,6 +370,9 @@ exports[`LaunchTemplate Construct(FirewallAutoScalingGroup):  Snapshot Test 1`] 
             },
           ],
           "SecurityGroupIds": [],
+          "UserData": {
+            "Fn::Base64": "S3 bucket name: test-bucket",
+          },
         },
         "LaunchTemplateName": "test-firewall",
       },

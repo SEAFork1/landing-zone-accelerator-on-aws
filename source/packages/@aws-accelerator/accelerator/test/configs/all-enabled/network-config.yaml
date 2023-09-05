@@ -2,6 +2,7 @@ homeRegion: &HOME_REGION us-east-1
 defaultVpc:
   delete: true
   excludeAccounts: []
+
 transitGateways:
   - name: Network-Main
     account: Network
@@ -102,6 +103,31 @@ transitGateways:
         routes:
           - destinationPrefixList: accelerator-prefix-list-001
             blackhole: true
+  - name: Network-Main-Us-West-2
+    account: Network
+    region: us-west-2
+    shareTargets:
+      organizationalUnits:
+        - Infrastructure
+    asn: 65521
+    dnsSupport: enable
+    vpnEcmpSupport: enable
+    defaultRouteTableAssociation: disable
+    defaultRouteTablePropagation: disable
+    autoAcceptSharingAttachments: enable
+    routeTables:
+      - name: Network-Main-Us-West-2-Core
+        routes: []
+      - name: Network-Main-Us-West-2-Segregated      
+        routes: []
+      - name: Network-Main-Us-West-2-Shared
+        routes: 
+          - destinationCidrBlock: 10.200.0.0/16
+          # - destinationPrefixList: accelerator-pl
+            attachment:
+              transitGatewayPeeringName: Network-Main-And-Network-Main-Us-West-2-And-Peering
+      - name: Network-Main-Standalone
+        routes: []   
 transitGatewayPeering:
   - name: Network-Main-And-SharedServices-Main-Peering
     requester:
@@ -125,9 +151,53 @@ transitGatewayPeering:
       account: Network
       region: *HOME_REGION
       routeTableAssociations: Network-Main-Shared
-      # autoAccept: true
-      # applyTags: false
-
+      autoAccept: true
+      applyTags: true
+  - name: Network-Main-2-And-SharedServices-Main-Peering
+    autoAccept: false
+    requester:
+      transitGatewayName: SharedServices-Main
+      account: SharedServices
+      region: *HOME_REGION
+      routeTableAssociations: SharedServices-Main-Shared
+      tags:
+        - key: Name
+          value: Network-Main-2-And-SharedServices-Main-Peering
+        - key: CostCenter
+          value: TSD-LZA
+        - key: Company
+          value: AWS
+        - key: Organization
+          value: WWPS
+        - key: Team
+          value: Development
+    accepter:
+      transitGatewayName: Network-Main-2
+      account: Network
+      region: *HOME_REGION
+      routeTableAssociations: Network-Main-2-Core
+      autoAccept: true
+      applyTags: true
+  - name: Network-Main-And-Network-Main-Us-West-2-And-Peering
+    requester:
+      transitGatewayName: Network-Main
+      account: Network
+      region: *HOME_REGION
+      routeTableAssociations: Network-Main-Shared
+      tags: 
+      - key: Name
+        value: Network-Main-And-Network-Main-Us-West-2-And-Peering
+      - key: CostCenter
+        value: TSD-LZA
+      - key: Company
+        value: AWS
+    accepter:
+      transitGatewayName: Network-Main-Us-West-2
+      account: Network
+      region: us-west-2
+      routeTableAssociations: Network-Main-Us-West-2-Shared
+      autoAccept: true
+      applyTags: true
 dhcpOptions:
   - name: accelerator-dhcp-opts
     accounts:
@@ -446,6 +516,20 @@ prefixLists:
     maxEntries: 1
     entries:
       - 10.100.0.1/32
+  - name: accelerator-prefix-list-ipv6
+    deploymentTargets:
+      organizationalUnits:
+        - Infrastructure
+    addressFamily: IPv6
+    maxEntries: 10
+    entries:
+      - 2400:cb00::/32
+      - 2606:4700::/32
+      - 2803:f800::/32
+      - 2405:b500::/32
+      - 2405:8100::/32
+      - 2a06:98c0::/29
+      - 2c0f:f248::/32
 
 endpointPolicies:
   - name: Default
@@ -559,9 +643,6 @@ vpcs:
   - name: Network-Secondary
     account: Network
     region: *HOME_REGION
-    tags:
-      - key: env
-        value: prod
     ipamAllocations:
       - ipamPoolName: home-region-prod-pool
         netmaskLength: 25
@@ -580,14 +661,14 @@ vpcs:
             destination: 0.0.0.0/0
             type: networkFirewall
             target: az-id-firewall
-            targetAvailabilityZone: a
+            targetAvailabilityZone: 1
       - name: Network-Secondary-D-Rt
         routes:
           - name: NfwRoute
             destination: 0.0.0.0/0
             type: networkFirewall
             target: az-id-firewall
-            targetAvailabilityZone: b
+            targetAvailabilityZone: 2
     subnets:
       - name: Network-Secondary-A
         availabilityZone: a
@@ -602,13 +683,13 @@ vpcs:
           ipamPoolName: home-region-prod-pool
           netmaskLength: 28
       - name: Network-Secondary-C
-        availabilityZone: a
+        availabilityZone: 1
         routeTable: Network-Secondary-C-Rt
         ipamAllocation:
           ipamPoolName: home-region-prod-pool
           netmaskLength: 28
       - name: Network-Secondary-D
-        availabilityZone: b
+        availabilityZone: 2
         routeTable: Network-Secondary-D-Rt
         ipamAllocation:
           ipamPoolName: home-region-prod-pool
@@ -909,7 +990,14 @@ vpcs:
         - service: kms
         - service: logs
         - service: s3
-        # - service: secretsmanager
+        - service: ecr.dkr
+        - service: s3-global.accesspoint
+        - service: codeartifact.repositories
+        - service: codeartifact.api
+        - service: eks
+          applyPolicy: false
+        - service: secretsmanager
+          securityGroup: Network-Endpoints-CustomEndpointSg
         # - service: cloudformation
         # - service: access-analyzer
         # - service: application-autoscaling
@@ -924,7 +1012,6 @@ vpcs:
         # - service: codepipeline
         # - service: config
         # - service: datasync
-        # - service: ecr.dkr
         # - service: ecs
         # - service: ecs-agent
         # - service: ecs-telemetry
@@ -950,7 +1037,6 @@ vpcs:
         # - service: transfer
         # - service: workspaces
         # - service: awsconnector
-        # - service: ecr.api
         # - service: kinesis-firehose
         # - service: states
         # - service: acm-pca
@@ -1026,6 +1112,21 @@ vpcs:
               - 22
             sources:
               - 10.0.0.0/8
+      - name: Network-Endpoints-CustomEndpointSg
+        description: Accelerator security group for custom endpoint
+        inboundRules:
+          - description: Allow access to 443
+            types:
+              - HTTPS
+            sources:
+              - 0.0.0.0/0
+
+        outboundRules:
+          - description: Allow all outbound
+            types:
+              - ALL
+            sources:
+              - 0.0.0.0/0
     networkAcls:
       - name: TestNACL
         subnetAssociations:
@@ -1238,21 +1339,21 @@ vpcs:
         gatewayAssociation: internetGateway
         routes:
           - name: NfwRouteDynamic-A
-            destination: 10.2.0.0/24
+            destination: Network-Inspection-A
             type: networkFirewall
             target: accelerator-firewall
             targetAvailabilityZone: a
           - name: GwlbRouteDynamic-A
-            destination: 10.2.1.0/24
+            destination: Network-InspectionTgwAttach-A
             type: gatewayLoadBalancerEndpoint
             target: Endpoint-A
           - name: NfwRouteDynamic-B
-            destination: 10.2.3.208/28
+            destination: Network-Inspection-B
             type: networkFirewall
             target: accelerator-firewall
             targetAvailabilityZone: b
           - name: GwlbRouteDynamic-B
-            destination: 10.2.3.224/28
+            destination: Network-InspectionTgwAttach-B
             type: gatewayLoadBalancerEndpoint
             target: Endpoint-B
     subnets:
@@ -1366,7 +1467,7 @@ vpcs:
         ipv4CidrBlock: 10.4.0.0/24
         shareTargets:
           organizationalUnits:
-            - Security
+            - Infrastructure
         tags:
           - key: Name
             value: SharedServices-App-A
@@ -1376,7 +1477,7 @@ vpcs:
         ipv4CidrBlock: 10.4.1.0/24
         shareTargets:
           organizationalUnits:
-            - Security
+            - Infrastructure
       - name: SharedServices-MainTgwAttach-A
         availabilityZone: a
         routeTable: SharedServices-Tgw-A
@@ -1405,7 +1506,7 @@ vpcs:
               sslPolicy: ELBSecurityPolicy-2016-08
           shareTargets:
             organizationalUnits:
-              - Security
+              - Infrastructure
     targetGroups:
       - name: deployed-tg-2
         port: 443
@@ -1413,7 +1514,7 @@ vpcs:
         type: instance
         shareTargets:
           organizationalUnits:
-            - Security
+            - Infrastructure
     transitGatewayAttachments:
       - name: SharedServices-Main
         transitGateway:
@@ -1508,6 +1609,118 @@ vpcs:
         - flow-direction
         - traffic-path
 
+  # vpc for application workloads
+  - name: SharedServices-appVpc
+    account: SharedServices
+    region: *HOME_REGION
+    cidrs:
+      - 10.1.0.0/16
+    internetGateway: true
+    enableDnsHostnames: true
+    enableDnsSupport: true
+    instanceTenancy: default
+    routeTables:
+      - name: PrivRtA
+        routes:
+          - name: NatRoute
+            destination: 0.0.0.0/0
+            type: natGateway
+            target: NatGwA
+      - name: PrivRtB
+        routes:
+          - name: NatRoute
+            destination: 0.0.0.0/0
+            type: natGateway
+            target: NatGwB
+      - name: PublicA
+        routes:
+          - name: IgwRoute
+            destination: 0.0.0.0/0
+            type: internetGateway
+            target: IGW
+      - name: PublicB
+        routes:
+          - name: IgwRoute
+            destination: 0.0.0.0/0
+            type: internetGateway
+            target: IGW
+    subnets:
+      - name: PublicA
+        availabilityZone: a
+        routeTable: PublicA
+        ipv4CidrBlock: 10.1.0.0/24
+      - name: PublicB
+        availabilityZone: b
+        routeTable: PublicB
+        ipv4CidrBlock: 10.1.1.0/24
+      - name: PrivateA
+        availabilityZone: a
+        routeTable: PrivRtA
+        ipv4CidrBlock: 10.1.2.0/24
+      - name: PrivateB
+        availabilityZone: b
+        routeTable: PrivRtB
+        ipv4CidrBlock: 10.1.3.0/24
+    natGateways:
+      - name: NatGwA
+        subnet: PublicA
+      - name: NatGwB
+        subnet: PublicB
+    securityGroups:
+      - name: appSecurityGroup
+        description: Accelerator security group
+        inboundRules:
+          - description: Self access security group
+            types:
+              - ALL
+            sources:
+              - securityGroups:
+                  - appSecurityGroup
+
+        outboundRules:
+          - description: Allow all outbound
+            types:
+              - ALL
+            sources:
+              - 0.0.0.0/0
+    vpcFlowLogs:
+      trafficType: ALL
+      maxAggregationInterval: 60
+      destinations:
+        - cloud-watch-logs
+      destinationsConfig:
+        cloudWatchLogs:
+          retentionInDays: 3653
+      defaultFormat: true
+      customFields:
+        - version
+        - account-id
+        - interface-id
+        - srcaddr
+        - dstaddr
+        - srcport
+        - dstport
+        - protocol
+        - packets
+        - bytes
+        - start
+        - end
+        - action
+        - log-status
+        - vpc-id
+        - subnet-id
+        - instance-id
+        - tcp-flags
+        - type
+        - pkt-srcaddr
+        - pkt-dstaddr
+        - region
+        - az-id
+        - pkt-src-aws-service
+        - pkt-dst-aws-service
+        - flow-direction
+        - traffic-path
+
 directConnectGateways:
   - name: Network-DXGW
     account: Network
@@ -1570,6 +1783,54 @@ customerGateways:
           - tunnelInsideCidr: 169.254.100.0/30
           - tunnelInsideCidr: 169.254.100.100/30
 
+      - name: enhanced-vpn
+        amazonIpv4NetworkCidr: 10.0.0.0/16
+        customerIpv4NetworkCidr: 192.168.0.0/16
+        enableVpnAcceleration: true
+        transitGateway: Network-Main
+        routeTableAssociations:
+          - Network-Main-Core
+        routeTablePropagations:
+          - Network-Main-Core
+        staticRoutesOnly: false
+        tunnelSpecifications:
+          - tunnelInsideCidr: 169.254.200.0/30
+            dpdTimeoutAction: restart
+            dpdTimeoutSeconds: 60
+            ikeVersions: [2]
+            phase1:
+              dhGroups: [2, 14, 20, 21, 22]
+              encryptionAlgorithms: [AES256, AES256-GCM-16]
+              integrityAlgorithms: [SHA2-256, SHA2-512]
+              lifetimeSeconds: 3600
+            phase2:
+              dhGroups: [5, 20]
+              encryptionAlgorithms: [AES128]
+              integrityAlgorithms: [SHA2-256]
+              lifetimeSeconds: 900
+            rekeyFuzzPercentage: 80
+            rekeyMarginTimeSeconds: 350
+            replayWindowSize: 64
+            startupAction: start
+            tunnelLifecycleControl: false
+          - tunnelInsideCidr: 169.254.200.100/30
+            dpdTimeoutAction: clear
+            dpdTimeoutSeconds: 120
+            ikeVersions: [2]
+            phase1:
+              dhGroups: [2, 14, 20, 21, 22]
+              encryptionAlgorithms: [AES256, AES256-GCM-16]
+              integrityAlgorithms: [SHA2-256, SHA2-512]
+              lifetimeSeconds: 3600
+            phase2:
+              dhGroups: [5, 20]
+              encryptionAlgorithms: [AES128]
+              integrityAlgorithms: [SHA2-256]
+              lifetimeSeconds: 900
+            rekeyFuzzPercentage: 65
+            rekeyMarginTimeSeconds: 120
+            replayWindowSize: 64
+
 vpcFlowLogs:
   trafficType: ALL
   maxAggregationInterval: 60
@@ -1618,7 +1879,9 @@ certificates:
     cert: cert1/cert.crt
     deploymentTargets:
       organizationalUnits:
-        - Security
+        - Infrastructure
+      accounts:
+        - SharedServices
   - name: cert2
     type: import
     privKey: cert1/privKey.key
@@ -1636,7 +1899,16 @@ certificates:
       - www.example.net
       - e.co
     deploymentTargets:
-      OU:
+      organizationalUnits:
+        - Security
+  - name: cert4
+    isExisting: true
+    type: import
+    privKey: cert4/privKey.key
+    cert: cert4/cert.crt
+    deploymentTargets:
+      organizationalUnits:
         - Infrastructure
+
 firewallManager:
   delegatedAdminAccount: Audit

@@ -18,6 +18,7 @@ import * as path from 'path';
 import { createLogger } from '@aws-accelerator/utils';
 
 import * as t from './common-types';
+import { ReplacementsConfig } from './replacements-config';
 
 const logger = createLogger(['security-config']);
 
@@ -294,6 +295,14 @@ export class SecurityConfigTypes {
     controlsToDisable: t.optional(t.array(t.nonEmptyString)),
   });
 
+  static readonly securityHubLoggingCloudwatchConfig = t.interface({
+    enable: t.boolean,
+  });
+
+  static readonly securityHubLoggingConfig = t.interface({
+    cloudWatch: t.optional(this.securityHubLoggingCloudwatchConfig),
+  });
+
   static readonly securityHubConfig = t.interface({
     enable: t.boolean,
     regionAggregation: t.optional(t.boolean),
@@ -301,6 +310,7 @@ export class SecurityConfigTypes {
     notificationLevel: t.optional(t.string),
     excludeRegions: t.optional(t.array(t.region)),
     standards: t.array(this.securityHubStandardConfig),
+    logging: t.optional(this.securityHubLoggingConfig),
   });
 
   static readonly ebsDefaultVolumeEncryptionConfig = t.interface({
@@ -446,6 +456,11 @@ export class SecurityConfigTypes {
      */
     // parameters: t.optional(t.dictionary(t.nonEmptyString, t.nonEmptyString)),
     parameters: t.optional(t.array(SecurityConfigTypes.remediationParametersConfigType)),
+
+    /**
+     * List of AWS Region names to be excluded from applying remediation
+     */
+    excludeRegions: t.optional(t.array(t.region)),
   });
 
   static readonly configRule = t.interface({
@@ -922,7 +937,7 @@ export class AuditManagerConfig implements t.TypeOf<typeof SecurityConfigTypes.a
    */
   readonly enable = false;
   /**
-   * (OPTIONAL) List of AWS Region names to be excluded from configuring AWS Audit Manager.
+   * (OPTIONAL) List of AWS Region names to be excluded from configuring AWS Audit Manager. Please ensure any regions enabled in the global configuration that do not support Audit Manager are added to the excluded regions list. {@link https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/ | Supported services by region}.
    */
   readonly excludeRegions: t.Region[] = [];
   /**
@@ -957,7 +972,7 @@ export class DetectiveConfig implements t.TypeOf<typeof SecurityConfigTypes.dete
    */
   readonly enable = false;
   /**
-   * (OPTIONAL) List of AWS Region names to be excluded from configuring Amazon Detective
+   * (OPTIONAL) List of AWS Region names to be excluded from configuring Amazon Detective. Please ensure any regions enabled in the global configuration that do not support Amazon Detective are added to the excluded regions list. {@link https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/ | Supported services by region}.
    */
   readonly excludeRegions: t.Region[] = [];
 }
@@ -976,7 +991,11 @@ export class DetectiveConfig implements t.TypeOf<typeof SecurityConfigTypes.dete
  *    organizationalUnits:
  *     -  Root
  *   enable: true
- *   controlsToDisable: []
+ *   controlsToDisable:
+ *     # Refer to the document for the controls
+ *     # https://docs.aws.amazon.com/securityhub/latest/userguide/pci-standard.html
+ *     - Control1
+ *     - Control2
  * ```
  */
 export class SecurityHubStandardConfig implements t.TypeOf<typeof SecurityConfigTypes.securityHubStandardConfig> {
@@ -1002,6 +1021,39 @@ export class SecurityHubStandardConfig implements t.TypeOf<typeof SecurityConfig
    */
   readonly controlsToDisable: string[] = [];
 }
+/**
+ * *{@link SecurityConfig} / {@link CentralSecurityServicesConfig} / {@link SecurityHubConfig} / {@link SecurityHubLoggingConfig} / {@link SecurityHubLoggingCloudwatchConfig}*
+ *
+ * @example
+ * ```
+ * enable: true
+ * ```
+ */
+export class SecurityHubLoggingCloudwatchConfig
+  implements t.TypeOf<typeof SecurityConfigTypes.securityHubLoggingCloudwatchConfig>
+{
+  /**
+   * Security hub to cloudwatch logging is enabled by default.
+   */
+  readonly enable = true;
+}
+
+/**
+ * *{@link SecurityConfig} / {@link CentralSecurityServicesConfig} / {@link SecurityHubConfig} / {@link SecurityHubLoggingConfig}*
+ *
+ * @example
+ * ```
+ * logging:
+ *   cloudWatch:
+ *     enable: true
+ * ```
+ */
+export class SecurityHubLoggingConfig implements t.TypeOf<typeof SecurityConfigTypes.securityHubLoggingConfig> {
+  /**
+   * Data store to ship the Security Hub logs to.
+   */
+  readonly cloudWatch: SecurityHubLoggingCloudwatchConfig | undefined = undefined;
+}
 
 /**
  * *{@link SecurityConfig} / {@link CentralSecurityServicesConfig} / {@link SecurityHubConfig}*
@@ -1012,18 +1064,23 @@ export class SecurityHubStandardConfig implements t.TypeOf<typeof SecurityConfig
  * @example
  * ```
  * securityHub:
- *     enable: true
- *     regionAggregation: true
- *     excludeRegions: []
- *     standards:
- *       - name: AWS Foundational Security Best Practices v1.0.0
- *         deploymentTargets:
- *          organizationalUnits:
- *            -  Root
- *         enable: true
- *         controlsToDisable:
- *           - IAM.1
- *           - EC2.10
+ *   enable: true
+ *   regionAggregation: true
+ *   excludeRegions: []
+ *   standards:
+ *     - name: AWS Foundational Security Best Practices v1.0.0
+ *       deploymentTargets:
+ *       organizationalUnits:
+ *         -  Root
+ *       enable: true
+ *       controlsToDisable:
+ *         # Refer to the document for the controls
+ *         # https://docs.aws.amazon.com/securityhub/latest/userguide/fsbp-standard.html
+ *         - Control1
+ *         - Control2
+ *   logging:
+ *     cloudWatch:
+ *       enable: true
  * ```
  */
 export class SecurityHubConfig implements t.TypeOf<typeof SecurityConfigTypes.securityHubConfig> {
@@ -1061,6 +1118,14 @@ export class SecurityHubConfig implements t.TypeOf<typeof SecurityConfigTypes.se
    * Security Hub standards configuration
    */
   readonly standards: SecurityHubStandardConfig[] = [];
+  /**
+   * (OPTIONAL) Security Hub logs are sent to CloudWatch logs by default. This option can enable or disable the logging.
+   *
+   * @remarks
+   * By default, if nothing is given `true` is taken. In order to stop logging, set this parameter to `false`.
+   * Please note, this option can be toggled but log group with `/${acceleratorPrefix}-SecurityHub` will remain in the account for every enabled region and will need to be manually deleted. This is designed to ensure no accidental loss of data occurs.
+   */
+  readonly logging: SecurityHubLoggingConfig | undefined = undefined;
 }
 
 /**
@@ -1252,11 +1317,30 @@ export class SsmAutomationConfig implements t.TypeOf<typeof SecurityConfigTypes.
  *     excludeRegions: []
  *     standards:
  *       - name: AWS Foundational Security Best Practices v1.0.0
- *         deploymentTargets:
- *          organizationalUnits:
- *            -  Root
  *         enable: true
- *         controlsToDisable: []
+ *       - name: PCI DSS v3.2.1
+ *         enable: true
+ *         controlsToDisable:
+ *           # Refer to the document for the controls
+ *           # https://docs.aws.amazon.com/securityhub/latest/userguide/pci-standard.html
+ *           - Control1
+ *           - Control2
+ *       - name: CIS AWS Foundations Benchmark v1.2.0
+ *         enable: true
+ *       - name: CIS AWS Foundations Benchmark v1.4.0
+ *         enable: true
+ *         controlsToDisable:
+ *           # Refer to the document for the controls
+ *           # https://docs.aws.amazon.com/securityhub/latest/userguide/cis-aws-foundations-benchmark.html#cis1v4-standard
+ *           - Control1
+ *           - Control2
+ *       - name: NIST Special Publication 800-53 Revision 5
+ *         enable: true
+ *         controlsToDisable:
+ *           # Refer to the document for the controls
+ *           # https://docs.aws.amazon.com/securityhub/latest/userguide/nist-standard.html
+ *           - Control1
+ *           - Control2
  *   ssmAutomation:
  *     documentSets: []
  *```
@@ -1384,7 +1468,7 @@ export class CentralSecurityServicesConfig
    * Accelerator use this parameter to define AWS Security Hub configuration.
    *
    * To enable AWS Security Hub for all regions and
-   * enable "AWS Foundational Security Best Practices v1.0.0" security standard for IAM.1 & EC2.10 controls
+   * enable "AWS Foundational Security Best Practices v1.0.0" security standard, deployment targets and disable controls
    * you need provide below value for this parameter.
    *
    * @example
@@ -1402,8 +1486,10 @@ export class CentralSecurityServicesConfig
    *            - Root
    *         enable: true
    *         controlsToDisable:
-   *           - IAM.1
-   *           - EC2.10
+   *           # Refer to the document for the control ID
+   *           # https://docs.aws.amazon.com/securityhub/latest/userguide/fsbp-standard.html
+   *           - Control1
+   *           - Control2
    * ```
    */
   readonly securityHub: SecurityHubConfig = new SecurityHubConfig();
@@ -1580,6 +1666,112 @@ export class AwsConfigAggregation implements t.TypeOf<typeof SecurityConfigTypes
 }
 
 /**
+ * *{@link SecurityConfig} / {@link AwsConfig} / {@link AwsConfigRuleSet} / {@link ConfigRule} / {@link ConfigRuleRemediation}*
+ *
+ * A remediation for the config rule, auto remediation to automatically remediate noncompliant resources.
+ *
+ * @example
+ *
+ * Managed Config rule with remediation:
+ * ```
+ * - name: accelerator-s3-bucket-server-side-encryption-enabled
+ *   identifier: S3_BUCKET_SERVER_SIDE_ENCRYPTION_ENABLED
+ *   complianceResourceTypes:
+ *     - AWS::S3::Bucket
+ *   remediation:
+ *     rolePolicyFile: path/to/policy.json
+ *     automatic: true
+ *     targetId: Put-S3-Encryption
+ *     retryAttemptSeconds: 60
+ *     maximumAutomaticAttempts: 5
+ *     parameters:
+ *       - name: BucketName
+ *         value: RESOURCE_ID
+ *         type: String
+ *       - name: KMSMasterKey
+ *         value: ${ACCEL_LOOKUP::KMS}
+ *         type: StringList
+ * ```
+ */
+export class ConfigRuleRemediation implements t.TypeOf<typeof SecurityConfigTypes.configRuleRemediationType> {
+  /**
+   * Remediation assume role policy definition json file. This file must be present in config repository.
+   *
+   * Create your own custom remediation actions using AWS Systems Manager Automation documents.
+   * When a role needed to be created to perform custom remediation actions, role permission needs to be defined in this file.
+   */
+  readonly rolePolicyFile = '';
+  /**
+   * The remediation is triggered automatically.
+   */
+  readonly automatic = true;
+  /**
+   * Target ID is the name of the public document.
+   *
+   * The name of the AWS SSM document to perform custom remediation actions.
+   */
+  readonly targetId = '';
+  /**
+   * Name of the account owning the public document to perform custom remediation actions.
+   * Accelerator creates these documents in Audit account and shared with other accounts.
+   */
+  readonly targetAccountName = '';
+  /**
+   * Version of the target. For example, version of the SSM document.
+   *
+   * If you make backward incompatible changes to the SSM document, you must call PutRemediationConfiguration API again to ensure the remediations can run.
+   */
+  readonly targetVersion = '';
+  /**
+   * Target SSM document remediation lambda function
+   */
+  readonly targetDocumentLambda = {
+    /**
+     * The source code file path of your Lambda function. This is a zip file containing lambda function, this file must be available in config repository.
+     */
+    sourceFilePath: '',
+    /**
+     * The name of the method within your code that Lambda calls to execute your function. The format includes the file name. It can also include namespaces and other qualifiers, depending on the runtime.
+     * For more information, see https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-features.html#gettingstarted-features-programmingmodel.
+     */
+    handler: '',
+    /**
+     * The runtime environment for the Lambda function that you are uploading. For valid values, see the Runtime property in the AWS Lambda Developer Guide.
+     */
+    runtime: '',
+    /**
+     * Lambda execution role policy definition file
+     */
+    rolePolicyFile: '',
+    /**
+     * Lambda function execution timeout in seconds
+     */
+    timeout: 3,
+  };
+  /**
+   * Maximum time in seconds that AWS Config runs auto-remediation. If you do not select a number, the default is 60 seconds.
+   *
+   * For example, if you specify RetryAttemptSeconds as 50 seconds and MaximumAutomaticAttempts as 5, AWS Config will run auto-remediations 5 times within 50 seconds before throwing an exception.
+   */
+  readonly retryAttemptSeconds = 0;
+  /**
+   * The maximum number of failed attempts for auto-remediation. If you do not select a number, the default is 5.
+   *
+   * For example, if you specify MaximumAutomaticAttempts as 5 with RetryAttemptSeconds as 50 seconds, AWS Config will put a RemediationException on your behalf for the failing resource after the 5th failed attempt within 50 seconds.
+   */
+  readonly maximumAutomaticAttempts = 0;
+  /**
+   * List of remediation parameters
+   *
+   */
+  readonly parameters = [];
+
+  /**
+   * List of AWS Region names to be excluded from applying remediation
+   */
+  readonly excludeRegions: t.Region[] = [];
+}
+/**
  * *{@link SecurityConfig} / {@link AwsConfig} / {@link AwsConfigRuleSet} / {@link ConfigRule}*
  *
  * AWS ConfigRule configuration
@@ -1602,7 +1794,7 @@ export class AwsConfigAggregation implements t.TypeOf<typeof SecurityConfigTypes
  *       lambda:
  *         sourceFilePath: path/to/function.zip
  *         handler: index.handler
- *         runtime: nodejs14.x
+ *         runtime: nodejsXX.x
  *         rolePolicyFile: path/to/policy.json
  *       periodic: true
  *       maximumExecutionFrequency: Six_Hours
@@ -1741,79 +1933,7 @@ export class ConfigRule implements t.TypeOf<typeof SecurityConfigTypes.configRul
   /**
    * A remediation for the config rule, auto remediation to automatically remediate noncompliant resources.
    */
-  readonly remediation = {
-    /**
-     * Remediation assume role policy definition json file. This file must be present in config repository.
-     *
-     * Create your own custom remediation actions using AWS Systems Manager Automation documents.
-     * When a role needed to be created to perform custom remediation actions, role permission needs to be defined in this file.
-     */
-    rolePolicyFile: '',
-    /**
-     * The remediation is triggered automatically.
-     */
-    automatic: true,
-    /**
-     * Target ID is the name of the public document.
-     *
-     * The name of the AWS SSM document to perform custom remediation actions.
-     */
-    targetId: '',
-    /**
-     * Name of the account owning the public document to perform custom remediation actions.
-     * Accelerator creates these documents in Audit account and shared with other accounts.
-     */
-    targetAccountName: '',
-    /**
-     * Version of the target. For example, version of the SSM document.
-     *
-     * If you make backward incompatible changes to the SSM document, you must call PutRemediationConfiguration API again to ensure the remediations can run.
-     */
-    targetVersion: '',
-    /**
-     * Target SSM document remediation lambda function
-     */
-    targetDocumentLambda: {
-      /**
-       * The source code file path of your Lambda function. This is a zip file containing lambda function, this file must be available in config repository.
-       */
-      sourceFilePath: '',
-      /**
-       * The name of the method within your code that Lambda calls to execute your function. The format includes the file name. It can also include namespaces and other qualifiers, depending on the runtime.
-       * For more information, see https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-features.html#gettingstarted-features-programmingmodel.
-       */
-      handler: '',
-      /**
-       * The runtime environment for the Lambda function that you are uploading. For valid values, see the Runtime property in the AWS Lambda Developer Guide.
-       */
-      runtime: '',
-      /**
-       * Lambda execution role policy definition file
-       */
-      rolePolicyFile: '',
-      /**
-       * Lambda function execution timeout in seconds
-       */
-      timeout: 3,
-    },
-    /**
-     * Maximum time in seconds that AWS Config runs auto-remediation. If you do not select a number, the default is 60 seconds.
-     *
-     * For example, if you specify RetryAttemptSeconds as 50 seconds and MaximumAutomaticAttempts as 5, AWS Config will run auto-remediations 5 times within 50 seconds before throwing an exception.
-     */
-    retryAttemptSeconds: 0,
-    /**
-     * The maximum number of failed attempts for auto-remediation. If you do not select a number, the default is 5.
-     *
-     * For example, if you specify MaximumAutomaticAttempts as 5 with RetryAttemptSeconds as 50 seconds, AWS Config will put a RemediationException on your behalf for the failing resource after the 5th failed attempt within 50 seconds.
-     */
-    maximumAutomaticAttempts: 0,
-    /**
-     * List of remediation parameters
-     *
-     */
-    parameters: [],
-  };
+  readonly remediation: ConfigRuleRemediation = new ConfigRuleRemediation();
 }
 
 /**
@@ -1865,7 +1985,7 @@ export class AwsConfigRuleSet implements t.TypeOf<typeof SecurityConfigTypes.aws
    *             lambda:
    *               sourceFilePath: custom-config-rules/attach-ec2-instance-profile.zip
    *               handler: index.handler
-   *               runtime: nodejs14.x
+   *               runtime: nodejsXX.x
    *               timeout: 3
    *             periodic: true
    *             maximumExecutionFrequency: Six_Hours
@@ -2523,11 +2643,14 @@ export class SecurityConfig implements t.TypeOf<typeof SecurityConfigTypes.secur
   /**
    *
    * @param dir
-   * @param validateConfig
+   * @param replacementsConfig
    * @returns
    */
-  static load(dir: string): SecurityConfig {
-    const buffer = fs.readFileSync(path.join(dir, SecurityConfig.FILENAME), 'utf8');
+
+  static load(dir: string, replacementsConfig?: ReplacementsConfig): SecurityConfig {
+    const initialBuffer = fs.readFileSync(path.join(dir, SecurityConfig.FILENAME), 'utf8');
+    const buffer = replacementsConfig ? replacementsConfig.preProcessBuffer(initialBuffer) : initialBuffer;
+
     const values = t.parse(SecurityConfigTypes.securityConfig, yaml.load(buffer));
     return new SecurityConfig(values);
   }

@@ -629,7 +629,6 @@ export class InstallerStack extends cdk.Stack {
                   yarn config set registry https://registry.npmmirror.com
                fi`,
               'yarn install',
-              'yarn lerna link',
               'yarn build',
               'cd packages/@aws-accelerator/installer',
               `if [ "$BOOTSTRAPPED_HOME" = "no" ]; then yarn run cdk bootstrap --toolkitStackName ${acceleratorPrefix}-CDKToolkit aws://${cdk.Aws.ACCOUNT_ID}/${cdk.Aws.REGION} --qualifier accel; fi`,
@@ -651,6 +650,15 @@ export class InstallerStack extends cdk.Stack {
                   unset AWS_SESSION_TOKEN;
                fi`,
               'cd ../accelerator',
+              `aws ssm get-parameter --name /accelerator/migration --query "Parameter.Value" 2> /dev/null
+                  status=$?
+                  if [ $status -ne 0 ]; then
+                    echo "No SSM Parameter found, setting ENABLE_ASEA_MIGRATION to false";
+                    export ENABLE_ASEA_MIGRATION=false
+                  else
+                    echo "SSM Parameter Found, setting ENABLE_ASEA_MIGRATION to true"
+                    export ENABLE_ASEA_MIGRATION=true
+                  fi;`,
               `yarn run ts-node --transpile-only cdk.ts deploy --require-approval never --stage pipeline --account ${cdk.Aws.ACCOUNT_ID} --region ${cdk.Aws.REGION} --partition ${cdk.Aws.PARTITION}`,
               `if [ "$ENABLE_TESTER" = "true" ]; then yarn run ts-node --transpile-only cdk.ts deploy --require-approval never --stage tester-pipeline --account ${cdk.Aws.ACCOUNT_ID} --region ${cdk.Aws.REGION}; fi`,
             ],

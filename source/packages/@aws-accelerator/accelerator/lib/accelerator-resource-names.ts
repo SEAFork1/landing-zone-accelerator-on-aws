@@ -1,18 +1,6 @@
+import { AcceleratorResourcePrefixes } from '../utils/app-utils';
 export interface AcceleratorResourceNamesProps {
-  readonly prefixes: {
-    /**
-     * Accelerator prefix - used for resource name prefix for resources which do not have explicit prefix
-     */
-    readonly accelerator: string;
-    readonly repoName: string;
-    readonly bucketName: string;
-    readonly ssmParamName: string;
-    readonly kmsAlias: string;
-    readonly snsTopicName: string;
-    readonly secretName: string;
-    readonly trailLogName: string;
-    readonly databaseName: string;
-  };
+  readonly prefixes: AcceleratorResourcePrefixes;
 }
 
 interface RoleNames {
@@ -29,8 +17,10 @@ interface RoleNames {
   crossAccountServiceCatalogPropagation: string;
   crossAccountSsmParameterShare: string;
   assetFunctionRoleName: string;
+  firewallConfigFunctionRoleName: string;
 }
 interface ParameterNames {
+  importedCentralLogBucketCmkArn: string;
   centralLogBucketCmkArn: string;
   controlTowerDriftDetection: string;
   controlTowerLastDriftMessage: string;
@@ -49,10 +39,14 @@ interface ParameterNames {
   lambdaCmkArn: string;
   managementCmkArn: string;
   assetsBucketCmkArn: string;
+  identityCenterInstanceArn: string;
+  identityStoreId: string;
+  firehoseRecordsProcessorFunctionName: string;
 }
 interface CmkDetails {
   orgTrailLog: { alias: string; description: string };
   centralLogsBucket: { alias: string; description: string };
+  importedCentralLogsBucket: { alias: string; description: string };
   metadataBucket: { alias: string; description: string };
   ebsDefault: { alias: string; description: string };
   s3: { alias: string; description: string };
@@ -71,6 +65,7 @@ interface BucketPrefixes {
   assetsAccessLog: string;
   assets: string;
   elbLogs: string;
+  firewallConfig: string;
   costUsage: string;
   s3AccessLogs: string;
   auditManager: string;
@@ -93,8 +88,10 @@ export class AcceleratorResourceNames {
     crossAccountServiceCatalogPropagation: 'PLACE_HOLDER',
     crossAccountSsmParameterShare: 'PLACE_HOLDER',
     assetFunctionRoleName: 'PLACE_HOLDER',
+    firewallConfigFunctionRoleName: 'PLACE_HOLDER',
   };
   public parameters: ParameterNames = {
+    importedCentralLogBucketCmkArn: 'PLACE_HOLDER',
     centralLogBucketCmkArn: 'PLACE_HOLDER',
     controlTowerDriftDetection: 'PLACE_HOLDER',
     controlTowerLastDriftMessage: 'PLACE_HOLDER',
@@ -113,10 +110,14 @@ export class AcceleratorResourceNames {
     lambdaCmkArn: 'PLACE_HOLDER',
     managementCmkArn: 'PLACE_HOLDER',
     assetsBucketCmkArn: 'PLACE_HOLDER',
+    identityCenterInstanceArn: 'PLACE_HOLDER',
+    identityStoreId: 'PLACE_HOLDER',
+    firehoseRecordsProcessorFunctionName: 'PLACE_HOLDER',
   };
   public customerManagedKeys: CmkDetails = {
     orgTrailLog: { alias: 'PLACE_HOLDER', description: 'PLACE_HOLDER' },
     centralLogsBucket: { alias: 'PLACE_HOLDER', description: 'PLACE_HOLDER' },
+    importedCentralLogsBucket: { alias: 'PLACE_HOLDER', description: 'PLACE_HOLDER' },
     metadataBucket: { alias: 'PLACE_HOLDER', description: 'PLACE_HOLDER' },
     ebsDefault: { alias: 'PLACE_HOLDER', description: 'PLACE_HOLDER' },
     s3: { alias: 'PLACE_HOLDER', description: 'PLACE_HOLDER' },
@@ -135,6 +136,7 @@ export class AcceleratorResourceNames {
     assetsAccessLog: 'PLACE_HOLDER',
     assets: 'PLACE_HOLDER',
     elbLogs: 'PLACE_HOLDER',
+    firewallConfig: 'PLACE_HOLDER',
     costUsage: 'PLACE_HOLDER',
     s3AccessLogs: 'PLACE_HOLDER',
     auditManager: 'PLACE_HOLDER',
@@ -162,9 +164,12 @@ export class AcceleratorResourceNames {
     this.roles.crossAccountServiceCatalogPropagation = props.prefixes.accelerator + '-CrossAccount-ServiceCatalog-Role';
     this.roles.crossAccountSsmParameterShare = props.prefixes.accelerator + '-CrossAccountSsmParameterShare';
     this.roles.assetFunctionRoleName = props.prefixes.accelerator + '-AssetsAccessRole';
+    this.roles.firewallConfigFunctionRoleName = props.prefixes.accelerator + '-FirewallConfigAccessRole';
 
     //
     // SSM Parameter initializations
+    this.parameters.importedCentralLogBucketCmkArn =
+      props.prefixes.importResourcesSsmParamName + '/logging/central-bucket/kms/arn';
     this.parameters.centralLogBucketCmkArn = props.prefixes.ssmParamName + '/logging/central-bucket/kms/arn';
     this.parameters.controlTowerDriftDetection = props.prefixes.ssmParamName + '/controltower/driftDetected';
     this.parameters.controlTowerLastDriftMessage = props.prefixes.ssmParamName + '/controltower/lastDriftMessage';
@@ -185,6 +190,10 @@ export class AcceleratorResourceNames {
     this.parameters.lambdaCmkArn = props.prefixes.ssmParamName + '/kms/lambda/key-arn';
     this.parameters.managementCmkArn = props.prefixes.ssmParamName + '/management/kms/key-arn';
     this.parameters.assetsBucketCmkArn = props.prefixes.ssmParamName + '/assets/kms/key';
+    this.parameters.identityCenterInstanceArn =
+      props.prefixes.ssmParamName + '/organization/security/identity-center/instance-arn';
+    this.parameters.identityStoreId =
+      props.prefixes.ssmParamName + '/organization/security/identity-center/identity-store-id';
 
     //
     // CMK details initialization
@@ -195,6 +204,10 @@ export class AcceleratorResourceNames {
     this.customerManagedKeys.centralLogsBucket = {
       alias: props.prefixes.kmsAlias + '/central-logs/s3',
       description: 'AWS Accelerator Central Logs Bucket CMK',
+    };
+    this.customerManagedKeys.importedCentralLogsBucket = {
+      alias: props.prefixes.kmsAlias + '/imported-bucket/central-logs/s3',
+      description: 'AWS Accelerator Imported Central Logs Bucket CMK',
     };
     this.customerManagedKeys.metadataBucket = {
       alias: props.prefixes.kmsAlias + '/kms/metadata/key',
@@ -254,11 +267,16 @@ export class AcceleratorResourceNames {
     this.bucketPrefixes.assetsAccessLog = props.prefixes.bucketName + '-assets-logs';
     this.bucketPrefixes.assets = props.prefixes.bucketName + '-assets';
     this.bucketPrefixes.elbLogs = props.prefixes.bucketName + '-elb-access-logs';
+    this.bucketPrefixes.firewallConfig = props.prefixes.bucketName + '-firewall-config';
     this.bucketPrefixes.costUsage = props.prefixes.bucketName + '-cur';
     this.bucketPrefixes.s3AccessLogs = props.prefixes.bucketName + '-s3-access-logs';
     this.bucketPrefixes.auditManager = props.prefixes.bucketName + '-auditmgr';
     this.bucketPrefixes.vpcFlowLogs = props.prefixes.bucketName + '-vpc';
     this.bucketPrefixes.metadata = props.prefixes.bucketName + '-metadata';
     this.bucketPrefixes.centralLogs = props.prefixes.bucketName + '-central-logs';
+
+    //
+    // Lambda function name initialization
+    this.parameters.firehoseRecordsProcessorFunctionName = props.prefixes.accelerator + '-FirehoseRecordsProcessor';
   }
 }

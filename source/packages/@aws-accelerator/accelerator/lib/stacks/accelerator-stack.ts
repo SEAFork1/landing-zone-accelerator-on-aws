@@ -20,13 +20,17 @@ import { v4 as uuidv4 } from 'uuid';
 import * as winston from 'winston';
 import { NagSuppressions } from 'cdk-nag';
 
+import { PrincipalOrgIdConditionType } from '@aws-accelerator/utils';
+
 import {
+  AccountConfig,
   AccountsConfig,
   BlockDeviceMappingItem,
   CustomizationsConfig,
   DeploymentTargets,
   EbsItemConfig,
   GlobalConfig,
+  GovCloudAccountConfig,
   IamConfig,
   LifeCycleRule,
   NetworkConfig,
@@ -43,60 +47,32 @@ import { createLogger, policyReplacements, SsmParameterPath, SsmResourceType } f
 
 import { version } from '../../../../../package.json';
 import { AcceleratorResourceNames } from '../accelerator-resource-names';
-
-/**
- * Allowed rule id type for NagSuppression
- */
-export enum NagSuppressionRuleIds {
-  DDB3 = 'DDB3',
-  EC28 = 'EC28',
-  EC29 = 'EC29',
-  IAM4 = 'IAM4',
-  IAM5 = 'IAM5',
-  SMG4 = 'SMG4',
-  VPC3 = 'VPC3',
-  AS3 = 'AS3',
-}
-
-/**
- * NagSuppression Detail Type
- */
-export type NagSuppressionDetailType = {
-  /**
-   * Suppressions rule id
-   */
-  id: NagSuppressionRuleIds;
-  /**
-   * Suppressions details
-   */
-  details: {
-    /**
-     * Resource path
-     */
-    path: string;
-    /**
-     * Suppressions reason
-     */
-    reason: string;
-  }[];
-};
+import { AcceleratorResourcePrefixes } from '../../utils/app-utils';
 
 /**
  * Accelerator Key type enum
  */
 export enum AcceleratorKeyType {
   /**
+   * Central Log Bucket key
+   */
+  CENTRAL_LOG_BUCKET = 'central-log-bucket',
+  /**
    * Cloudwatch key
    */
   CLOUDWATCH_KEY = 'cloudwatch-key',
+  /**
+   * Imported Central Log Bucket key
+   */
+  IMPORTED_CENTRAL_LOG_BUCKET = 'imported-central-log-bucket',
   /**
    * Lambda key
    */
   LAMBDA_KEY = 'lambda-key',
   /**
-   * Central Log Bucket key
+   * S3 key
    */
-  CENTRAL_LOG_BUCKET = 'central-log-bucket',
+  S3_KEY = 's3-key',
 }
 
 /**
@@ -133,6 +109,45 @@ export enum ServiceLinkedRoleType {
   FMS = 'fms',
 }
 
+/**
+ * Allowed rule id type for NagSuppression
+ */
+export enum NagSuppressionRuleIds {
+  DDB3 = 'DDB3',
+  EC28 = 'EC28',
+  EC29 = 'EC29',
+  IAM4 = 'IAM4',
+  IAM5 = 'IAM5',
+  SMG4 = 'SMG4',
+  VPC3 = 'VPC3',
+  S1 = 'S1',
+  KDS3 = 'KDS3',
+  AS3 = 'AS3',
+}
+
+/**
+ * NagSuppression Detail Type
+ */
+export type NagSuppressionDetailType = {
+  /**
+   * Suppressions rule id
+   */
+  id: NagSuppressionRuleIds;
+  /**
+   * Suppressions details
+   */
+  details: {
+    /**
+     * Resource path
+     */
+    path: string;
+    /**
+     * Suppressions reason
+     */
+    reason: string;
+  }[];
+};
+
 export interface AcceleratorStackProps extends cdk.StackProps {
   readonly configDirPath: string;
   readonly accountsConfig: AccountsConfig;
@@ -151,47 +166,12 @@ export interface AcceleratorStackProps extends cdk.StackProps {
   /**
    * Accelerator resource name prefixes
    */
-  readonly prefixes: {
-    /**
-     * Use this prefix value to name resources like -
-     AWS IAM Role names, AWS Lambda Function names, AWS Cloudwatch log groups names, AWS CloudFormation stack names, AWS CodePipeline names, AWS CodeBuild project names
-     *
-     */
-    readonly accelerator: string;
-    /**
-     * Use this prefix value to name AWS CodeCommit repository
-     */
-    readonly repoName: string;
-    /**
-     * Use this prefix value to name AWS S3 bucket
-     */
-    readonly bucketName: string;
-    /**
-     * Use this prefix value to name AWS SSM parameter
-     */
-    readonly ssmParamName: string;
-    /**
-     * Use this prefix value to name AWS KMS alias
-     */
-    readonly kmsAlias: string;
-    /**
-     * Use this prefix value to name AWS SNS topic
-     */
-    readonly snsTopicName: string;
-    /**
-     * Use this prefix value to name AWS Secrets
-     */
-    readonly secretName: string;
-    /**
-     * Use this prefix value to name AWS CloudTrail CloudWatch log group
-     */
-    readonly trailLogName: string;
-    /**
-     * Use this prefix value to name AWS Glue database
-     */
-    readonly databaseName: string;
-  };
+  readonly prefixes: AcceleratorResourcePrefixes;
   readonly enableSingleAccountMode: boolean;
+  /**
+   * Use existing roles for deployment
+   */
+  readonly useExistingRoles: boolean;
 }
 
 process.on('uncaughtException', err => {
@@ -203,7 +183,11 @@ process.on('uncaughtException', err => {
 export abstract class AcceleratorStack extends cdk.Stack {
   protected logger: winston.Logger;
   protected props: AcceleratorStackProps;
-  protected organizationId: string | undefined;
+
+  /**
+   * Nag suppression input list
+   */
+  protected nagSuppressionInputs: NagSuppressionDetailType[] = [];
 
   /**
    * Accelerator SSM parameters
@@ -211,17 +195,19 @@ export abstract class AcceleratorStack extends cdk.Stack {
    */
   protected ssmParameters: { logicalId: string; parameterName: string; stringValue: string }[];
 
+  protected centralLogsBucketName: string;
+
+  protected organizationId: string | undefined;
+
   public acceleratorResourceNames: AcceleratorResourceNames;
 
-  /**
-   * List of supported partitions for Service Linked Role creation
-   */
-  protected serviceLinkedRoleSupportedPartitionList: string[] = ['aws', 'aws-cn', 'aws-us-gov'];
+  public stackParameters: Map<string, cdk.aws_ssm.StringParameter>;
 
   /**
-   * Nag suppression input list
+   * External resource SSM parameters
+   * These parameters are loaded along with externalResourceMapping from SSM
    */
-  protected nagSuppressionInputs: NagSuppressionDetailType[] = [];
+  private externalResourceParameters: { [key: string]: string } | undefined;
 
   protected constructor(scope: Construct, id: string, props: AcceleratorStackProps) {
     super(scope, id, props);
@@ -230,605 +216,106 @@ export abstract class AcceleratorStack extends cdk.Stack {
     this.props = props;
     this.ssmParameters = [];
     this.organizationId = props.organizationConfig.getOrganizationId();
-
     //
     // Initialize resource names
     this.acceleratorResourceNames = new AcceleratorResourceNames({ prefixes: props.prefixes });
 
-    new cdk.aws_ssm.StringParameter(this, 'SsmParamStackId', {
-      parameterName: this.getSsmPath(SsmResourceType.STACK_ID, [cdk.Stack.of(this).stackName]),
-      stringValue: cdk.Stack.of(this).stackId,
-    });
+    //
+    // Get CentralLogBucket name
+    this.centralLogsBucketName = this.getCentralLogBucketName();
 
-    new cdk.aws_ssm.StringParameter(this, 'SsmParamAcceleratorVersion', {
-      parameterName: this.getSsmPath(SsmResourceType.VERSION, [cdk.Stack.of(this).stackName]),
-      stringValue: version,
-    });
-  }
+    //
+    // Get external resource ssm parameters from pre loaded globalConfig
+    this.externalResourceParameters =
+      props.globalConfig.externalLandingZoneResources?.resourceParameters?.[`${this.account}-${this.region}`];
 
-  /**
-   * This method creates SSM parameters stored in the `AcceleratorStack.ssmParameters` array.
-   * If more than five parameters are defined, the method adds a `dependsOn` statement
-   * to remaining parameters in order to avoid API throttling issues.
-   */
-  protected createSsmParameters(): void {
-    let index = 1;
-    const parameterMap = new Map<number, cdk.aws_ssm.StringParameter>();
-
-    for (const parameterItem of this.ssmParameters) {
-      // Create parameter
-      const parameter = new cdk.aws_ssm.StringParameter(this, parameterItem.logicalId, {
-        parameterName: parameterItem.parameterName,
-        stringValue: parameterItem.stringValue,
-      });
-      parameterMap.set(index, parameter);
-
-      // Add a dependency for every 5 parameters
-      if (index > 5) {
-        const dependsOnParam = parameterMap.get(index - (index % 5));
-        if (!dependsOnParam) {
-          this.logger.error(
-            `Error creating SSM parameter ${parameterItem.parameterName}: previous SSM parameter undefined`,
-          );
-          throw new Error(`Configuration validation failed at runtime.`);
-        }
-        parameter.node.addDependency(dependsOnParam);
-      }
-      // Increment index
-      index += 1;
-    }
-  }
-
-  public isIncluded(deploymentTargets: DeploymentTargets): boolean {
-    // Explicit Denies
-    if (
-      this.isRegionExcluded(deploymentTargets.excludedRegions) ||
-      this.isAccountExcluded(deploymentTargets.excludedAccounts)
-    ) {
-      return false;
-    }
-
-    // Explicit Allows
-    if (
-      this.isAccountIncluded(deploymentTargets.accounts) ||
-      this.isOrganizationalUnitIncluded(deploymentTargets.organizationalUnits)
-    ) {
-      return true;
-    }
-
-    // Implicit Deny
-    return false;
-  }
-  protected getAccountNamesFromDeploymentTarget(deploymentTargets: DeploymentTargets): string[] {
-    const accountNames: string[] = [];
-
-    for (const ou of deploymentTargets.organizationalUnits ?? []) {
-      if (ou === 'Root') {
-        for (const account of [
-          ...this.props.accountsConfig.mandatoryAccounts,
-          ...this.props.accountsConfig.workloadAccounts,
-        ]) {
-          accountNames.push(account.name);
-        }
-      } else {
-        for (const account of [
-          ...this.props.accountsConfig.mandatoryAccounts,
-          ...this.props.accountsConfig.workloadAccounts,
-        ]) {
-          if (ou === account.organizationalUnit) {
-            accountNames.push(account.name);
-          }
-        }
-      }
-    }
-
-    for (const account of deploymentTargets.accounts ?? []) {
-      accountNames.push(account);
-    }
-
-    return [...new Set(accountNames)];
-  }
-
-  // Helper function to add an account id to the list
-  private _addAccountId(ids: string[], accountId: string) {
-    if (!ids.includes(accountId)) {
-      ids.push(accountId);
-    }
-  }
-
-  public getAccountIdsFromDeploymentTarget(deploymentTargets: DeploymentTargets): string[] {
-    const accountIds: string[] = [];
-
-    for (const ou of deploymentTargets.organizationalUnits ?? []) {
-      // debug: processing ou
-      if (ou === 'Root') {
-        for (const account of [
-          ...this.props.accountsConfig.mandatoryAccounts,
-          ...this.props.accountsConfig.workloadAccounts,
-        ]) {
-          const accountId = this.props.accountsConfig.getAccountId(account.name);
-          this._addAccountId(accountIds, accountId);
-        }
-      } else {
-        for (const account of [
-          ...this.props.accountsConfig.mandatoryAccounts,
-          ...this.props.accountsConfig.workloadAccounts,
-        ]) {
-          if (ou === account.organizationalUnit) {
-            const accountId = this.props.accountsConfig.getAccountId(account.name);
-            this._addAccountId(accountIds, accountId);
-          }
-        }
-      }
-    }
-
-    for (const account of deploymentTargets.accounts ?? []) {
-      const accountId = this.props.accountsConfig.getAccountId(account);
-      this._addAccountId(accountIds, accountId);
-    }
-
-    const excludedAccountIds = this.getExcludedAccountIds(deploymentTargets);
-    const filteredAccountIds = accountIds.filter(item => !excludedAccountIds.includes(item));
-
-    return filteredAccountIds;
-  }
-
-  protected getExcludedAccountIds(deploymentTargets: DeploymentTargets): string[] {
-    const accountIds: string[] = [];
-
-    if (deploymentTargets.excludedAccounts) {
-      deploymentTargets.excludedAccounts.forEach(account =>
-        this._addAccountId(accountIds, this.props.accountsConfig.getAccountId(account)),
-      );
-    }
-
-    return accountIds;
-  }
-
-  public getRegionsFromDeploymentTarget(deploymentTargets: DeploymentTargets): Region[] {
-    const regions: Region[] = [];
-    const enabledRegions = this.props.globalConfig.enabledRegions;
-    regions.push(
-      ...enabledRegions.filter(region => {
-        return !deploymentTargets?.excludedRegions?.includes(region);
+    this.stackParameters = new Map<string, cdk.aws_ssm.StringParameter>();
+    this.stackParameters.set(
+      'StackId',
+      new cdk.aws_ssm.StringParameter(this, 'SsmParamStackId', {
+        parameterName: this.getSsmPath(SsmResourceType.STACK_ID, [cdk.Stack.of(this).stackName]),
+        stringValue: cdk.Stack.of(this).stackId,
       }),
     );
-    return regions;
-  }
 
-  public getVpcAccountIds(vpcItem: VpcConfig | VpcTemplatesConfig): string[] {
-    let vpcAccountIds: string[];
-
-    if (NetworkConfigTypes.vpcConfig.is(vpcItem)) {
-      vpcAccountIds = [this.props.accountsConfig.getAccountId(vpcItem.account)];
-    } else {
-      const excludedAccountIds = this.getExcludedAccountIds(vpcItem.deploymentTargets);
-      vpcAccountIds = this.getAccountIdsFromDeploymentTarget(vpcItem.deploymentTargets).filter(
-        item => !excludedAccountIds.includes(item),
-      );
-    }
-
-    return vpcAccountIds;
-  }
-
-  public getAccountIdsFromShareTarget(shareTargets: ShareTargets): string[] {
-    const accountIds: string[] = [];
-
-    for (const ou of shareTargets.organizationalUnits ?? []) {
-      if (ou === 'Root') {
-        for (const account of [
-          ...this.props.accountsConfig.mandatoryAccounts,
-          ...this.props.accountsConfig.workloadAccounts,
-        ]) {
-          const accountId = this.props.accountsConfig.getAccountId(account.name);
-          this._addAccountId(accountIds, accountId);
-        }
-      } else {
-        for (const account of [
-          ...this.props.accountsConfig.mandatoryAccounts,
-          ...this.props.accountsConfig.workloadAccounts,
-        ]) {
-          if (ou === account.organizationalUnit) {
-            const accountId = this.props.accountsConfig.getAccountId(account.name);
-            this._addAccountId(accountIds, accountId);
-          }
-        }
-      }
-    }
-
-    for (const account of shareTargets.accounts ?? []) {
-      const accountId = this.props.accountsConfig.getAccountId(account);
-      this._addAccountId(accountIds, accountId);
-    }
-
-    return accountIds;
-  }
-
-  protected isRegionExcluded(regions: string[]): boolean {
-    if (regions?.includes(cdk.Stack.of(this).region)) {
-      this.logger.info(`${cdk.Stack.of(this).region} region explicitly excluded`);
-      return true;
-    }
-    return false;
-  }
-
-  public isAccountExcluded(accounts: string[]): boolean {
-    for (const account of accounts ?? []) {
-      if (cdk.Stack.of(this).account === this.props.accountsConfig.getAccountId(account)) {
-        this.logger.info(`${account} account explicitly excluded`);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  protected isAccountIncluded(accounts: string[]): boolean {
-    for (const account of accounts ?? []) {
-      if (cdk.Stack.of(this).account === this.props.accountsConfig.getAccountId(account)) {
-        const accountConfig = this.props.accountsConfig.getAccount(account);
-        if (this.props.organizationConfig.isIgnored(accountConfig.organizationalUnit)) {
-          this.logger.info(`Account ${account} was not included as it is a member of an ignored organizational unit.`);
-          return false;
-        }
-        this.logger.info(`${account} account explicitly included`);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  protected isOrganizationalUnitIncluded(organizationalUnits: string[]): boolean {
-    if (organizationalUnits) {
-      // Full list of all accounts
-      const accounts = [...this.props.accountsConfig.mandatoryAccounts, ...this.props.accountsConfig.workloadAccounts];
-
-      // Find the account with the matching ID
-      const account = accounts.find(
-        item => this.props.accountsConfig.getAccountId(item.name) === cdk.Stack.of(this).account,
-      );
-
-      if (account) {
-        if (organizationalUnits.indexOf(account.organizationalUnit) != -1 || organizationalUnits.includes('Root')) {
-          const ignored = this.props.organizationConfig.isIgnored(account.organizationalUnit);
-          if (ignored) {
-            this.logger.info(`${account.organizationalUnit} is ignored and not included`);
-          }
-          this.logger.info(`${account.organizationalUnit} organizational unit included`);
-          return true;
-        }
-      }
-    }
-
-    return false;
+    this.stackParameters.set(
+      'StackVersion',
+      new cdk.aws_ssm.StringParameter(this, 'SsmParamAcceleratorVersion', {
+        parameterName: this.getSsmPath(SsmResourceType.VERSION, [cdk.Stack.of(this).stackName]),
+        stringValue: version,
+      }),
+    );
   }
 
   /**
-   * Function to get S3 life cycle rules
-   * @param lifecycleRules
+   * Function to get server access logs bucket name
    * @returns
-   */
-  protected getS3LifeCycleRules(lifecycleRules: LifeCycleRule[] | undefined): S3LifeCycleRule[] {
-    const rules: S3LifeCycleRule[] = [];
-    for (const lifecycleRule of lifecycleRules ?? []) {
-      const noncurrentVersionTransitions = [];
-      for (const noncurrentVersionTransition of lifecycleRule.noncurrentVersionTransitions ?? []) {
-        noncurrentVersionTransitions.push({
-          storageClass: noncurrentVersionTransition.storageClass,
-          transitionAfter: noncurrentVersionTransition.transitionAfter,
-        });
-      }
-      const transitions = [];
-      for (const transition of lifecycleRule.transitions ?? []) {
-        transitions.push({
-          storageClass: transition.storageClass,
-          transitionAfter: transition.transitionAfter,
-        });
-      }
-      const rule: S3LifeCycleRule = {
-        abortIncompleteMultipartUploadAfter: lifecycleRule.abortIncompleteMultipartUpload,
-        enabled: lifecycleRule.enabled,
-        expiration: lifecycleRule.expiration,
-        expiredObjectDeleteMarker: lifecycleRule.expiredObjectDeleteMarker,
-        id: lifecycleRule.id,
-        noncurrentVersionExpiration: lifecycleRule.noncurrentVersionExpiration,
-        noncurrentVersionTransitions,
-        transitions,
-      };
-      rules.push(rule);
-    }
-    return rules;
-  }
-
-  /**
-   * Returns the SSM parameter path for the given resource type and replacement strings.
-   * @see {@link SsmParameterPath} for resource type schema
    *
-   * @param resourceType
-   * @param replacements
+   * @remarks
+   * If importedBucket used returns imported server access logs bucket name else return solution defined bucket name
+   */
+  protected getServerAccessLogsBucketName(): string {
+    if (this.props.globalConfig.logging.accessLogBucket?.importedBucket?.name) {
+      return this.getBucketNameReplacement(this.props.globalConfig.logging.accessLogBucket.importedBucket.name);
+    } else {
+      return `${this.acceleratorResourceNames.bucketPrefixes.s3AccessLogs}-${cdk.Aws.ACCOUNT_ID}-${cdk.Aws.REGION}`;
+    }
+  }
+
+  /**
+   * Function to get ELB logs bucket name
+   * @returns
+   *
+   * @remarks
+   * If importedBucket used returns imported ELB logs bucket name else solution defined bucket name
+   */
+  protected getElbLogsBucketName(): string {
+    if (this.props.globalConfig.logging.elbLogBucket?.importedBucket?.name) {
+      return this.getBucketNameReplacement(this.props.globalConfig.logging.elbLogBucket.importedBucket.name);
+    } else {
+      return `${
+        this.acceleratorResourceNames.bucketPrefixes.elbLogs
+      }-${this.props.accountsConfig.getLogArchiveAccountId()}-${cdk.Stack.of(this).region}`;
+    }
+  }
+
+  /**
+   * Function to get Central Log bucket name
    * @returns
    */
-  public getSsmPath(resourceType: SsmResourceType, replacements: string[]) {
-    // Prefix applied to all SSM parameters
-    // Static for now, but leaving option to modify for future iterations
-    const ssmPrefix = this.props.prefixes.ssmParamName;
-    return new SsmParameterPath(ssmPrefix, resourceType, replacements).parameterPath;
+  private getCentralLogBucketName(): string {
+    if (this.props.globalConfig.logging.centralLogBucket?.importedBucket) {
+      return this.getBucketNameReplacement(this.props.globalConfig.logging.centralLogBucket.importedBucket.name);
+    }
+    return `${
+      this.acceleratorResourceNames.bucketPrefixes.centralLogs
+    }-${this.props.accountsConfig.getLogArchiveAccountId()}-${this.props.centralizedLoggingRegion}`;
   }
 
   /**
-   * Function to get list of targets by type organization unit or account for given scp
-   * @param targetName
-   * @param targetType
-   * @returns
+   * Function to get CentralLogs bucket key
+   * @param customResourceLambdaCloudWatchLogKmsKey {@link cdk.aws_kms.IKey}
+   *
+   * @returns key {@link cdk.aws_kms.IKey}
+   *
+   * @remarks
+   * If importedBucket used returns imported CentralLogs bucket cmk arn else return solution defined CentralLogs bucket cmk arn
    */
-  protected getScpNamesForTarget(targetName: string, targetType: 'ou' | 'account'): string[] {
-    const scps: string[] = [];
-
-    for (const serviceControlPolicy of this.props.organizationConfig.serviceControlPolicies) {
-      if (targetType === 'ou' && serviceControlPolicy.deploymentTargets.organizationalUnits) {
-        if (serviceControlPolicy.deploymentTargets.organizationalUnits.indexOf(targetName) !== -1) {
-          scps.push(serviceControlPolicy.name);
-        }
-      }
-      if (targetType === 'account' && serviceControlPolicy.deploymentTargets.accounts) {
-        if (serviceControlPolicy.deploymentTargets.accounts.indexOf(targetName) !== -1) {
-          scps.push(serviceControlPolicy.name);
-        }
-      }
-    }
-    return scps;
-  }
-
-  /**
-   * Get the IAM condition context key for the organization.
-   */
-  protected getPrincipalOrgIdCondition(organizationId: string | undefined): { [key: string]: string | string[] } {
-    if (this.props.partition === 'aws-cn' || !this.props.organizationConfig.enable) {
-      const accountIds = this.props.accountsConfig.getAccountIds();
-      if (accountIds) {
-        return {
-          'aws:PrincipalAccount': accountIds,
-        };
-      }
-    }
-    if (organizationId) {
-      return {
-        'aws:PrincipalOrgID': organizationId,
-      };
-    }
-    this.logger.error('Organization ID not found or account IDs not found');
-    throw new Error(`Configuration validation failed at runtime.`);
-  }
-
-  /**
-   * Get the IAM principals for the organization.
-   */
-  public getOrgPrincipals(organizationId: string | undefined): cdk.aws_iam.IPrincipal {
-    if (this.props.partition === 'aws-cn' || !this.props.organizationConfig.enable) {
-      const accountIds = this.props.accountsConfig.getAccountIds();
-      if (accountIds) {
-        const principals: cdk.aws_iam.PrincipalBase[] = [];
-        accountIds.forEach(accountId => {
-          principals.push(new cdk.aws_iam.AccountPrincipal(accountId));
-        });
-        return new cdk.aws_iam.CompositePrincipal(...principals);
-      }
-    }
-    if (organizationId) {
-      return new cdk.aws_iam.OrganizationPrincipal(organizationId);
-    }
-    this.logger.error('Organization ID not found or account IDs not found');
-    throw new Error(`Configuration validation failed at runtime.`);
-  }
-
-  /**
-   * Generate policy replacements and optionally return a temp path
-   * to the transformed document
-   * @param policyPath
-   * @param returnTempPath
-   * @param organizationId
-   * @returns
-   */
-  protected generatePolicyReplacements(policyPath: string, returnTempPath: boolean, organizationId?: string): string {
-    // Transform policy document
-    let policyContent: string = JSON.stringify(require(policyPath));
-    const acceleratorPrefix = this.props.prefixes.accelerator;
-    const acceleratorPrefixNoDash = acceleratorPrefix.endsWith('-')
-      ? acceleratorPrefix.slice(0, -1)
-      : acceleratorPrefix;
-
-    const additionalReplacements: { [key: string]: string | string[] } = {
-      '\\${ACCELERATOR_DEFAULT_PREFIX_SHORTHAND}': acceleratorPrefix.substring(0, 4).toUpperCase(),
-      '\\${ACCELERATOR_PREFIX_ND}': acceleratorPrefixNoDash,
-      '\\${ACCELERATOR_PREFIX_LND}': acceleratorPrefixNoDash.toLowerCase(),
-      '\\${ACCOUNT_ID}': cdk.Stack.of(this).account,
-      '\\${AUDIT_ACCOUNT_ID}': this.props.accountsConfig.getAuditAccountId(),
-      '\\${HOME_REGION}': this.props.globalConfig.homeRegion,
-      '\\${LOGARCHIVE_ACCOUNT_ID}': this.props.accountsConfig.getLogArchiveAccountId(),
-      '\\${MANAGEMENT_ACCOUNT_ID}': this.props.accountsConfig.getManagementAccountId(),
-      '\\${REGION}': cdk.Stack.of(this).region,
-    };
-
-    if (organizationId) {
-      additionalReplacements['\\${ORG_ID}'] = organizationId;
-    }
-
-    policyContent = policyReplacements({
-      content: policyContent,
-      acceleratorPrefix,
-      managementAccountAccessRole: this.props.globalConfig.managementAccountAccessRole,
-      partition: this.props.partition,
-      additionalReplacements,
-    });
-
-    if (returnTempPath) {
-      return this.createTempFile(policyContent);
+  protected getCentralLogsBucketKey(customResourceLambdaCloudWatchLogKmsKey: cdk.aws_kms.IKey): cdk.aws_kms.Key {
+    if (this.props.globalConfig.logging.centralLogBucket?.importedBucket?.name) {
+      return this.getAcceleratorKey(
+        AcceleratorKeyType.IMPORTED_CENTRAL_LOG_BUCKET,
+        customResourceLambdaCloudWatchLogKmsKey,
+      );
     } else {
-      return policyContent;
+      return this.getAcceleratorKey(AcceleratorKeyType.CENTRAL_LOG_BUCKET, customResourceLambdaCloudWatchLogKmsKey);
     }
   }
 
   /**
-   * Create a temp file of a transformed policy document
-   * @param policyContent
-   * @returns
+   * List of supported partitions for Service Linked Role creation
    */
-  private createTempFile(policyContent: string): string {
-    // Generate unique file path in temporary directory
-    let tempDir: string;
-    if (process.platform === 'win32') {
-      try {
-        fs.accessSync(process.env['Temp']!, fs.constants.W_OK);
-      } catch (e) {
-        this.logger.error(`Unable to write files to temp directory: ${e}`);
-      }
-      tempDir = path.join(process.env['Temp']!, 'temp-accelerator-policies');
-    } else {
-      try {
-        fs.accessSync('/tmp', fs.constants.W_OK);
-      } catch (e) {
-        this.logger.error(`Unable to write files to temp directory: ${e}`);
-      }
-      tempDir = path.join('/tmp', 'temp-accelerator-policies');
-    }
-    const tempPath = path.join(tempDir, `${uuidv4()}.json`);
-
-    // Write transformed file
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir);
-    }
-    fs.writeFileSync(tempPath, policyContent, 'utf-8');
-
-    return tempPath;
-  }
-
-  protected generateManagedPolicyReferences(customerManagedPolicyReferencesList: string[]) {
-    let customerManagedPolicyReferences: cdk.aws_sso.CfnPermissionSet.CustomerManagedPolicyReferenceProperty[] = [];
-    if (customerManagedPolicyReferencesList) {
-      customerManagedPolicyReferences = customerManagedPolicyReferencesList.map(x => ({
-        name: x,
-      }));
-    }
-    return customerManagedPolicyReferences;
-  }
-
-  protected convertMinutesToIso8601(s: number) {
-    const days = Math.floor(s / 1440);
-    s = s - days * 1440;
-    const hours = Math.floor(s / 60);
-    s = s - hours * 60;
-
-    let dur = 'PT';
-    if (days > 0) {
-      dur += days + 'D';
-    }
-    if (hours > 0) {
-      dur += hours + 'H';
-    }
-    dur += s + 'M';
-
-    return dur.toString();
-  }
-
-  protected processBlockDeviceReplacements(blockDeviceMappings: BlockDeviceMappingItem[], appName: string) {
-    const mappings: BlockDeviceMappingItem[] = [];
-    blockDeviceMappings.forEach(device =>
-      mappings.push({
-        deviceName: device.deviceName,
-        ebs: device.ebs ? this.processKmsKeyReplacements(device, appName) : undefined,
-      }),
-    );
-
-    return mappings;
-  }
-
-  protected processKmsKeyReplacements(device: BlockDeviceMappingItem, appName: string): EbsItemConfig {
-    if (device.ebs!.kmsKeyId) {
-      return this.replaceKmsKeyIdProvided(device, appName);
-    }
-    if (device.ebs!.encrypted && this.props.securityConfig.centralSecurityServices.ebsDefaultVolumeEncryption.enable) {
-      return this.replaceKmsKeyDefaultEncryption(device, appName);
-    }
-
-    return {
-      deleteOnTermination: device.ebs!.deleteOnTermination,
-      encrypted: device.ebs!.encrypted,
-      iops: device.ebs!.iops,
-      kmsKeyId: device.ebs!.kmsKeyId,
-      snapshotId: device.ebs!.snapshotId,
-      throughput: device.ebs!.throughput,
-      volumeSize: device.ebs!.volumeSize,
-      volumeType: device.ebs!.volumeType,
-    };
-  }
-
-  protected replaceKmsKeyDefaultEncryption(device: BlockDeviceMappingItem, appName: string): EbsItemConfig {
-    let ebsEncryptionKey: cdk.aws_kms.Key;
-    // user set encryption as true and has default ebs encryption enabled
-    // user defined kms key is provided
-    if (this.props.securityConfig.centralSecurityServices.ebsDefaultVolumeEncryption.kmsKey) {
-      ebsEncryptionKey = cdk.aws_kms.Key.fromKeyArn(
-        this,
-        pascalCase(this.props.securityConfig.centralSecurityServices.ebsDefaultVolumeEncryption.kmsKey) +
-          pascalCase(`AcceleratorGetKey-${appName}-${device.deviceName}`) +
-          `-KmsKey`,
-        cdk.aws_ssm.StringParameter.valueForStringParameter(
-          this,
-          `${this.props.prefixes.ssmParamName}/kms/${this.props.securityConfig.centralSecurityServices.ebsDefaultVolumeEncryption.kmsKey}/key-arn`,
-        ),
-      ) as cdk.aws_kms.Key;
-    } else {
-      // user set encryption as true and has default ebs encryption enabled
-      // no kms key is provided
-      ebsEncryptionKey = cdk.aws_kms.Key.fromKeyArn(
-        this,
-        pascalCase(`AcceleratorGetKey-${appName}-${device.deviceName}-${device.ebs!.kmsKeyId}`),
-        cdk.aws_ssm.StringParameter.valueForStringParameter(
-          this,
-          `${this.props.prefixes.ssmParamName}/security-stack/ebsDefaultVolumeEncryptionKeyArn`,
-        ),
-      ) as cdk.aws_kms.Key;
-    }
-    return {
-      deleteOnTermination: device.ebs!.deleteOnTermination,
-      encrypted: device.ebs!.encrypted,
-      iops: device.ebs!.iops,
-      kmsKeyId: ebsEncryptionKey.keyId,
-      snapshotId: device.ebs!.snapshotId,
-      throughput: device.ebs!.throughput,
-      volumeSize: device.ebs!.volumeSize,
-      volumeType: device.ebs!.volumeType,
-    };
-  }
-
-  protected replaceKmsKeyIdProvided(device: BlockDeviceMappingItem, appName: string): EbsItemConfig {
-    const kmsKeyEntity = cdk.aws_kms.Key.fromKeyArn(
-      this,
-      pascalCase(`AcceleratorGetKey-${appName}-${device.deviceName}-${device.ebs!.kmsKeyId}`),
-      cdk.aws_ssm.StringParameter.valueForStringParameter(
-        this,
-        `${this.props.prefixes.ssmParamName}/kms/${device.ebs!.kmsKeyId}/key-arn`,
-      ),
-    ) as cdk.aws_kms.Key;
-    return {
-      deleteOnTermination: device.ebs!.deleteOnTermination,
-      encrypted: device.ebs!.encrypted,
-      iops: device.ebs!.iops,
-      kmsKeyId: kmsKeyEntity.keyId,
-      snapshotId: device.ebs!.snapshotId,
-      throughput: device.ebs!.throughput,
-      volumeSize: device.ebs!.volumeSize,
-      volumeType: device.ebs!.volumeType,
-    };
-  }
-
-  protected replaceImageId(imageId: string) {
-    if (imageId.match('\\${ACCEL_LOOKUP::ImageId:(.*)}')) {
-      const imageIdMatch = imageId.match('\\${ACCEL_LOOKUP::ImageId:(.*)}');
-      return cdk.aws_ssm.StringParameter.valueForStringParameter(this, imageIdMatch![1]);
-    } else {
-      return imageId;
-    }
-  }
+  protected serviceLinkedRoleSupportedPartitionList: string[] = ['aws', 'aws-cn', 'aws-us-gov'];
 
   /**
    * Create Access Analyzer Service Linked role
@@ -1110,6 +597,32 @@ export abstract class AcceleratorStack extends cdk.Stack {
   }
 
   /**
+   * Function to get active account ids
+   * @returns accountIds string
+   *
+   * @remarks
+   * Get only non suspended OUs account ids
+   */
+  protected getActiveAccountIds() {
+    const accountNames: string[] = [];
+    const accountIds: string[] = [];
+    const suspendedOuItems = this.props.organizationConfig.organizationalUnits.filter(item => item.ignore);
+    const suspendedOuNames = suspendedOuItems.flatMap(item => item.name);
+
+    for (const accountItem of [
+      ...this.props.accountsConfig.mandatoryAccounts,
+      ...this.props.accountsConfig.workloadAccounts,
+    ]) {
+      if (!suspendedOuNames.includes(accountItem.organizationalUnit)) {
+        accountNames.push(accountItem.name);
+      }
+    }
+
+    accountNames.forEach(item => accountIds.push(this.props.accountsConfig.getAccountId(item)));
+    return accountIds;
+  }
+
+  /**
    * Create AWS CLOUD9 Service Linked role
    *
    * @remarks
@@ -1176,12 +689,51 @@ export abstract class AcceleratorStack extends cdk.Stack {
     lambdaKey: cdk.aws_kms.Key,
   ): ServiceLinkedRole {
     // create service linked roles only in the partitions that allow it
-    return this.createServiceLinkedRole(ServiceLinkedRoleType.FMS, cloudwatchKey, lambdaKey);
+    const serviceLinkedRole = this.createServiceLinkedRole(ServiceLinkedRoleType.FMS, cloudwatchKey, lambdaKey);
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM4,
+      details: [
+        {
+          path: `${this.stackName}/FirewallManagerServiceLinkedRole/CreateServiceLinkedRoleFunction/ServiceRole/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM5,
+      details: [
+        {
+          path: `${this.stackName}/FirewallManagerServiceLinkedRole/CreateServiceLinkedRoleFunction/ServiceRole/DefaultPolicy/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM4,
+      details: [
+        {
+          path: `${this.stackName}/FirewallManagerServiceLinkedRole/CreateServiceLinkedRoleProvider/framework-onEvent/ServiceRole/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+
+    this.nagSuppressionInputs.push({
+      id: NagSuppressionRuleIds.IAM5,
+      details: [
+        {
+          path: `${this.stackName}/FirewallManagerServiceLinkedRole/CreateServiceLinkedRoleProvider/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
+          reason: 'Custom resource Lambda role policy.',
+        },
+      ],
+    });
+    return serviceLinkedRole;
   }
   /**
    * Function to create Service Linked Role for given type
    * @param roleType {@link ServiceLinkedRoleType}
-   * @returns CreateServiceLinkedRole
+   * @returns ServiceLinkedRole
    *
    * @remarks
    * Service Linked Role creation is depended on the service configuration.
@@ -1262,7 +814,7 @@ export abstract class AcceleratorStack extends cdk.Stack {
           this.props.securityConfig.centralSecurityServices.ebsDefaultVolumeEncryption.enable &&
           this.props.partition === 'aws'
         ) {
-          this.logger.debug('Create AutoScalingServiceLinkedRole');
+          this.logger.debug('Create Aws Cloud9 Service Linked Role');
           new ServiceLinkedRole(this, 'AWSServiceRoleForAWSCloud9', {
             awsServiceName: 'cloud9.amazonaws.com',
             description: 'Service linked role for AWS Cloud9',
@@ -1301,6 +853,13 @@ export abstract class AcceleratorStack extends cdk.Stack {
   ): cdk.aws_kms.Key {
     let key: cdk.aws_kms.Key | undefined;
     switch (keyType) {
+      case AcceleratorKeyType.S3_KEY:
+        key = cdk.aws_kms.Key.fromKeyArn(
+          this,
+          'AcceleratorS3KeyLookup',
+          cdk.aws_ssm.StringParameter.valueForStringParameter(this, this.acceleratorResourceNames.parameters.s3CmkArn),
+        ) as cdk.aws_kms.Key;
+        break;
       case AcceleratorKeyType.CLOUDWATCH_KEY:
         key = cdk.aws_kms.Key.fromKeyArn(
           this,
@@ -1331,6 +890,18 @@ export abstract class AcceleratorStack extends cdk.Stack {
           logRetentionInDays: this.props.globalConfig.cloudwatchLogRetentionInDays,
           acceleratorPrefix: this.props.prefixes.accelerator,
         }).getKey();
+
+        break;
+      case AcceleratorKeyType.IMPORTED_CENTRAL_LOG_BUCKET:
+        key = new KeyLookup(this, 'AcceleratorImportedCentralLogBucketKeyLookup', {
+          accountId: this.props.accountsConfig.getLogArchiveAccountId(),
+          keyRegion: this.props.centralizedLoggingRegion,
+          roleName: this.acceleratorResourceNames.roles.crossAccountSsmParameterShare,
+          keyArnParameterName: this.acceleratorResourceNames.parameters.importedCentralLogBucketCmkArn,
+          kmsKey: customResourceLambdaCloudWatchLogKmsKey,
+          logRetentionInDays: this.props.globalConfig.cloudwatchLogRetentionInDays,
+          acceleratorPrefix: this.props.prefixes.accelerator,
+        }).getKey();
         break;
       default:
         throw new Error(`Invalid key type ${keyType}`);
@@ -1340,16 +911,730 @@ export abstract class AcceleratorStack extends cdk.Stack {
   }
 
   /**
-   * Function to add resource suppressions by path
-   * @param inputs {@link NagSuppressionDetailType}
+   * Function to get replacement bucket name
+   * @param name
+   * @returns
    */
-  protected addResourceSuppressionsByPath(inputs: NagSuppressionDetailType[]): void {
-    for (const input of inputs) {
-      for (const detail of input.details) {
+  protected getBucketNameReplacement(name: string): string {
+    return name.replace('${REGION}', cdk.Stack.of(this).region).replace('${ACCOUNT_ID}', cdk.Stack.of(this).account);
+  }
+
+  /**
+   * This method creates SSM parameters stored in the `AcceleratorStack.ssmParameters` array.
+   * If more than five parameters are defined, the method adds a `dependsOn` statement
+   * to remaining parameters in order to avoid API throttling issues.
+   */
+  protected createSsmParameters(): void {
+    let index = 1;
+    const parameterMap = new Map<number, cdk.aws_ssm.StringParameter>();
+
+    for (const parameterItem of this.ssmParameters) {
+      // Create parameter
+      const parameter = new cdk.aws_ssm.StringParameter(this, parameterItem.logicalId, {
+        parameterName: parameterItem.parameterName,
+        stringValue: parameterItem.stringValue,
+      });
+      parameterMap.set(index, parameter);
+
+      // Add a dependency for every 5 parameters
+      if (index > 5) {
+        const dependsOnParam = parameterMap.get(index - (index % 5));
+        if (!dependsOnParam) {
+          this.logger.error(
+            `Error creating SSM parameter ${parameterItem.parameterName}: previous SSM parameter undefined`,
+          );
+          throw new Error(`Configuration validation failed at runtime.`);
+        }
+        parameter.node.addDependency(dependsOnParam);
+      }
+      // Increment index
+      index += 1;
+    }
+  }
+
+  /**
+   * Function to add resource suppressions by path
+   */
+  protected addResourceSuppressionsByPath(): void {
+    for (const nagSuppressionInput of this.nagSuppressionInputs) {
+      for (const detail of nagSuppressionInput.details) {
         NagSuppressions.addResourceSuppressionsByPath(this, detail.path, [
-          { id: `AwsSolutions-${input.id}`, reason: detail.reason },
+          { id: `AwsSolutions-${nagSuppressionInput.id}`, reason: detail.reason },
         ]);
       }
     }
+  }
+
+  public isIncluded(deploymentTargets: DeploymentTargets): boolean {
+    // Explicit Denies
+    if (
+      this.isRegionExcluded(deploymentTargets.excludedRegions) ||
+      this.isAccountExcluded(deploymentTargets.excludedAccounts)
+    ) {
+      return false;
+    }
+
+    // Explicit Allows
+    if (
+      this.isAccountIncluded(deploymentTargets.accounts) ||
+      this.isOrganizationalUnitIncluded(deploymentTargets.organizationalUnits)
+    ) {
+      return true;
+    }
+
+    // Implicit Deny
+    return false;
+  }
+
+  /**
+   * Private helper function to get account names from Accounts array of DeploymentTarget
+   * @param accounts
+   * @returns Array of account names
+   *
+   * @remarks Used only in getAccountNamesFromDeploymentTarget function.
+   */
+  private getAccountNamesFromDeploymentTargetAccountNames(accounts: string[]): string[] {
+    const accountNames: string[] = [];
+    for (const account of accounts ?? []) {
+      accountNames.push(account);
+    }
+    return accountNames;
+  }
+
+  /**
+   * Private helper function to get account names from given list of account configs
+   * @param ouName
+   * @param accountConfigs
+   * @returns Array of account names
+   *
+   * @remarks Used only in getAccountNamesFromDeploymentTarget function.
+   */
+  private getAccountNamesFromAccountConfigs(
+    ouName: string,
+    accountConfigs: (AccountConfig | GovCloudAccountConfig)[],
+  ): string[] {
+    const accountNames: string[] = [];
+    if (ouName === 'Root') {
+      for (const account of accountConfigs) {
+        accountNames.push(account.name);
+      }
+    } else {
+      for (const account of accountConfigs) {
+        if (ouName === account.organizationalUnit) {
+          accountNames.push(account.name);
+        }
+      }
+    }
+
+    return accountNames;
+  }
+
+  /**
+   * Function to get list of account names from given DeploymentTargets.
+   * @param deploymentTargets
+   * @returns Array of account names
+   */
+  protected getAccountNamesFromDeploymentTarget(deploymentTargets: DeploymentTargets): string[] {
+    const accountNames: string[] = [];
+
+    for (const ou of deploymentTargets.organizationalUnits ?? []) {
+      accountNames.push(
+        ...this.getAccountNamesFromAccountConfigs(ou, [
+          ...this.props.accountsConfig.mandatoryAccounts,
+          ...this.props.accountsConfig.workloadAccounts,
+        ]),
+      );
+    }
+
+    accountNames.push(...this.getAccountNamesFromDeploymentTargetAccountNames(deploymentTargets.accounts));
+
+    return [...new Set(accountNames)];
+  }
+
+  // Helper function to add an account id to the list
+  private _addAccountId(ids: string[], accountId: string) {
+    if (!ids.includes(accountId)) {
+      ids.push(accountId);
+    }
+  }
+
+  /**
+   * Private helper function to append account ids from Accounts array of DeploymentTarget or ShareTargets
+   * @param accounts
+   * @param accountIds - List where processed account ids from Accounts array of DeploymentTarget or ShareTargets to be appended to.
+   * @returns Array of Account Ids
+   *
+   * @remarks Used only in getAccountIdsFromDeploymentTarget function.
+   */
+  private appendAccountIdsFromDeploymentTargetAccounts(
+    deploymentTargets: DeploymentTargets | ShareTargets,
+    accountIds: string[],
+  ): void {
+    for (const accountName of deploymentTargets.accounts ?? []) {
+      const accountId = this.props.accountsConfig.getAccountId(accountName);
+      this._addAccountId(accountIds, accountId);
+    }
+  }
+
+  /**
+   * Private helper function to append account ids from given list of account configs
+   * @param ouName
+   * @param accountConfigs
+   * @param accountIds - List where processed account ids from accountConfigs to be appended to.
+   * @returns Array of Account Ids
+   *
+   * @remarks Used only in getAccountIdsFromDeploymentTarget function.
+   */
+  private appendAccountIdsFromAccountConfigs(
+    ouName: string,
+    accountConfigs: (AccountConfig | GovCloudAccountConfig)[],
+    accountIds: string[],
+  ): void {
+    if (ouName === 'Root') {
+      for (const accountConfig of accountConfigs) {
+        const accountId = this.props.accountsConfig.getAccountId(accountConfig.name);
+        this._addAccountId(accountIds, accountId);
+      }
+    } else {
+      for (const accountConfig of accountConfigs) {
+        if (ouName === accountConfig.organizationalUnit) {
+          const accountId = this.props.accountsConfig.getAccountId(accountConfig.name);
+          this._addAccountId(accountIds, accountId);
+        }
+      }
+    }
+  }
+
+  /**
+   * Function to get account ids from given DeploymentTarget
+   * @param deploymentTargets
+   * @returns
+   */
+  public getAccountIdsFromDeploymentTarget(deploymentTargets: DeploymentTargets): string[] {
+    const accountIds: string[] = [];
+
+    for (const ou of deploymentTargets.organizationalUnits ?? []) {
+      this.appendAccountIdsFromAccountConfigs(
+        ou,
+        [...this.props.accountsConfig.mandatoryAccounts, ...this.props.accountsConfig.workloadAccounts],
+        accountIds,
+      );
+    }
+
+    this.appendAccountIdsFromDeploymentTargetAccounts(deploymentTargets, accountIds);
+
+    const excludedAccountIds = this.getExcludedAccountIds(deploymentTargets);
+    const filteredAccountIds = accountIds.filter(item => !excludedAccountIds.includes(item));
+
+    return filteredAccountIds;
+  }
+
+  protected getExcludedAccountIds(deploymentTargets: DeploymentTargets): string[] {
+    const accountIds: string[] = [];
+
+    if (deploymentTargets.excludedAccounts) {
+      deploymentTargets.excludedAccounts.forEach(account =>
+        this._addAccountId(accountIds, this.props.accountsConfig.getAccountId(account)),
+      );
+    }
+
+    return accountIds;
+  }
+
+  public getRegionsFromDeploymentTarget(deploymentTargets: DeploymentTargets): Region[] {
+    const regions: Region[] = [];
+    const enabledRegions = this.props.globalConfig.enabledRegions;
+    regions.push(
+      ...enabledRegions.filter(region => {
+        return !deploymentTargets?.excludedRegions?.includes(region);
+      }),
+    );
+    return regions;
+  }
+
+  public getVpcAccountIds(vpcItem: VpcConfig | VpcTemplatesConfig): string[] {
+    let vpcAccountIds: string[];
+
+    if (NetworkConfigTypes.vpcConfig.is(vpcItem)) {
+      vpcAccountIds = [this.props.accountsConfig.getAccountId(vpcItem.account)];
+    } else {
+      const excludedAccountIds = this.getExcludedAccountIds(vpcItem.deploymentTargets);
+      vpcAccountIds = this.getAccountIdsFromDeploymentTarget(vpcItem.deploymentTargets).filter(
+        item => !excludedAccountIds.includes(item),
+      );
+    }
+
+    return vpcAccountIds;
+  }
+
+  /**
+   * Function to get central endpoint vpc
+   * @returns VpcConfig {@link VpcConfig}
+   */
+  protected getCentralEndpointVpc(): VpcConfig {
+    let centralEndpointVpc = undefined;
+    const centralEndpointVpcs = this.props.networkConfig.vpcs.filter(
+      item =>
+        item.interfaceEndpoints?.central &&
+        this.props.accountsConfig.getAccountId(item.account) === cdk.Stack.of(this).account &&
+        item.region === cdk.Stack.of(this).region,
+    );
+
+    if (this.props.partition !== 'aws' && this.props.partition !== 'aws-cn' && centralEndpointVpcs.length > 0) {
+      this.logger.error('Central Endpoint VPC is only possible in commercial regions');
+      throw new Error(`Configuration validation failed at runtime.`);
+    }
+
+    if (centralEndpointVpcs.length > 1) {
+      this.logger.error(`multiple (${centralEndpointVpcs.length}) central endpoint vpcs detected, should only be one`);
+      throw new Error(`Configuration validation failed at runtime.`);
+    }
+    centralEndpointVpc = centralEndpointVpcs[0];
+
+    return centralEndpointVpc;
+  }
+
+  /**
+   * Function to get account ids from ShareTarget
+   * @param shareTargets
+   * @returns
+   */
+  public getAccountIdsFromShareTarget(shareTargets: ShareTargets): string[] {
+    const accountIds: string[] = [];
+
+    for (const ou of shareTargets.organizationalUnits ?? []) {
+      this.appendAccountIdsFromAccountConfigs(
+        ou,
+        [...this.props.accountsConfig.mandatoryAccounts, ...this.props.accountsConfig.workloadAccounts],
+        accountIds,
+      );
+    }
+
+    this.appendAccountIdsFromDeploymentTargetAccounts(shareTargets, accountIds);
+
+    return accountIds;
+  }
+
+  protected isRegionExcluded(regions: string[]): boolean {
+    if (regions?.includes(cdk.Stack.of(this).region)) {
+      this.logger.info(`${cdk.Stack.of(this).region} region explicitly excluded`);
+      return true;
+    }
+    return false;
+  }
+
+  public isAccountExcluded(accounts: string[]): boolean {
+    for (const account of accounts ?? []) {
+      if (cdk.Stack.of(this).account === this.props.accountsConfig.getAccountId(account)) {
+        this.logger.info(`${account} account explicitly excluded`);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  protected isAccountIncluded(accounts: string[]): boolean {
+    for (const account of accounts ?? []) {
+      if (cdk.Stack.of(this).account === this.props.accountsConfig.getAccountId(account)) {
+        const accountConfig = this.props.accountsConfig.getAccount(account);
+        if (this.props.organizationConfig.isIgnored(accountConfig.organizationalUnit)) {
+          this.logger.info(`Account ${account} was not included as it is a member of an ignored organizational unit.`);
+          return false;
+        }
+        this.logger.info(`${account} account explicitly included`);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  protected isOrganizationalUnitIncluded(organizationalUnits: string[]): boolean {
+    if (organizationalUnits) {
+      // Full list of all accounts
+      const accounts = [...this.props.accountsConfig.mandatoryAccounts, ...this.props.accountsConfig.workloadAccounts];
+
+      // Find the account with the matching ID
+      const account = accounts.find(
+        item => this.props.accountsConfig.getAccountId(item.name) === cdk.Stack.of(this).account,
+      );
+
+      if (account) {
+        if (organizationalUnits.indexOf(account.organizationalUnit) != -1 || organizationalUnits.includes('Root')) {
+          const ignored = this.props.organizationConfig.isIgnored(account.organizationalUnit);
+          if (ignored) {
+            this.logger.info(`${account.organizationalUnit} is ignored and not included`);
+          }
+          this.logger.info(`${account.organizationalUnit} organizational unit included`);
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Function to get S3 life cycle rules
+   * @param lifecycleRules
+   * @returns
+   */
+  protected getS3LifeCycleRules(lifecycleRules: LifeCycleRule[] | undefined): S3LifeCycleRule[] {
+    const rules: S3LifeCycleRule[] = [];
+    for (const lifecycleRule of lifecycleRules ?? []) {
+      const noncurrentVersionTransitions = [];
+      for (const noncurrentVersionTransition of lifecycleRule.noncurrentVersionTransitions ?? []) {
+        noncurrentVersionTransitions.push({
+          storageClass: noncurrentVersionTransition.storageClass,
+          transitionAfter: noncurrentVersionTransition.transitionAfter,
+        });
+      }
+      const transitions = [];
+      for (const transition of lifecycleRule.transitions ?? []) {
+        transitions.push({
+          storageClass: transition.storageClass,
+          transitionAfter: transition.transitionAfter,
+        });
+      }
+      const rule: S3LifeCycleRule = {
+        abortIncompleteMultipartUploadAfter: lifecycleRule.abortIncompleteMultipartUpload,
+        enabled: lifecycleRule.enabled,
+        expiration: lifecycleRule.expiration,
+        expiredObjectDeleteMarker: lifecycleRule.expiredObjectDeleteMarker,
+        id: lifecycleRule.id,
+        noncurrentVersionExpiration: lifecycleRule.noncurrentVersionExpiration,
+        noncurrentVersionTransitions,
+        transitions,
+      };
+      rules.push(rule);
+    }
+    return rules;
+  }
+
+  /**
+   * Returns the SSM parameter path for the given resource type and replacement strings.
+   * @see {@link SsmParameterPath} for resource type schema
+   *
+   * @param resourceType
+   * @param replacements
+   * @returns
+   */
+  public getSsmPath(resourceType: SsmResourceType, replacements: string[]) {
+    // Prefix applied to all SSM parameters
+    // Static for now, but leaving option to modify for future iterations
+    const ssmPrefix = this.props.prefixes.ssmParamName;
+    return new SsmParameterPath(ssmPrefix, resourceType, replacements).parameterPath;
+  }
+
+  /**
+   * Function to get list of targets by type organization unit or account for given scp
+   * @param targetName
+   * @param targetType
+   * @returns
+   */
+  protected getScpNamesForTarget(targetName: string, targetType: 'ou' | 'account'): string[] {
+    const scps: string[] = [];
+
+    for (const serviceControlPolicy of this.props.organizationConfig.serviceControlPolicies) {
+      if (targetType === 'ou' && serviceControlPolicy.deploymentTargets.organizationalUnits) {
+        if (serviceControlPolicy.deploymentTargets.organizationalUnits.indexOf(targetName) !== -1) {
+          scps.push(serviceControlPolicy.name);
+        }
+      }
+      if (targetType === 'account' && serviceControlPolicy.deploymentTargets.accounts) {
+        if (serviceControlPolicy.deploymentTargets.accounts.indexOf(targetName) !== -1) {
+          scps.push(serviceControlPolicy.name);
+        }
+      }
+    }
+    return scps;
+  }
+
+  /**
+   * Get the IAM condition context key for the organization.
+   * @param organizationId string | undefined
+   * @returns
+   */
+  protected getPrincipalOrgIdCondition(organizationId: string | undefined): PrincipalOrgIdConditionType {
+    if (this.props.partition === 'aws-cn' || !this.props.organizationConfig.enable) {
+      const accountIds = this.props.accountsConfig.getAccountIds();
+      if (accountIds) {
+        return {
+          'aws:PrincipalAccount': accountIds,
+        };
+      }
+    }
+    if (organizationId) {
+      return {
+        'aws:PrincipalOrgID': organizationId,
+      };
+    }
+    this.logger.error('Organization ID not found or account IDs not found');
+    throw new Error(`Configuration validation failed at runtime.`);
+  }
+
+  /**
+   * Get the IAM principals for the organization.
+   */
+  public getOrgPrincipals(organizationId: string | undefined): cdk.aws_iam.IPrincipal {
+    if (this.props.partition === 'aws-cn' || !this.props.organizationConfig.enable) {
+      const accountIds = this.props.accountsConfig.getAccountIds();
+      if (accountIds) {
+        const principals: cdk.aws_iam.PrincipalBase[] = [];
+        accountIds.forEach(accountId => {
+          principals.push(new cdk.aws_iam.AccountPrincipal(accountId));
+        });
+        return new cdk.aws_iam.CompositePrincipal(...principals);
+      }
+    }
+    if (organizationId) {
+      return new cdk.aws_iam.OrganizationPrincipal(organizationId);
+    }
+    this.logger.error('Organization ID not found or account IDs not found');
+    throw new Error(`Configuration validation failed at runtime.`);
+  }
+
+  /**
+   * Generate policy replacements and optionally return a temp path
+   * to the transformed document
+   * @param policyPath
+   * @param returnTempPath
+   * @param organizationId
+   * @param tempFileName
+   * @returns
+   */
+  public generatePolicyReplacements(
+    policyPath: string,
+    returnTempPath: boolean,
+    organizationId?: string,
+    tempFileName?: string,
+  ): string {
+    // Transform policy document
+    let policyContent: string = JSON.stringify(require(policyPath));
+    const acceleratorPrefix = this.props.prefixes.accelerator;
+    const acceleratorPrefixNoDash = acceleratorPrefix.endsWith('-')
+      ? acceleratorPrefix.slice(0, -1)
+      : acceleratorPrefix;
+
+    const additionalReplacements: { [key: string]: string | string[] } = {
+      '\\${ACCELERATOR_DEFAULT_PREFIX_SHORTHAND}': acceleratorPrefix.substring(0, 4).toUpperCase(),
+      '\\${ACCELERATOR_PREFIX_ND}': acceleratorPrefixNoDash,
+      '\\${ACCELERATOR_PREFIX_LND}': acceleratorPrefixNoDash.toLowerCase(),
+      '\\${ACCOUNT_ID}': cdk.Stack.of(this).account,
+      '\\${AUDIT_ACCOUNT_ID}': this.props.accountsConfig.getAuditAccountId(),
+      '\\${HOME_REGION}': this.props.globalConfig.homeRegion,
+      '\\${LOGARCHIVE_ACCOUNT_ID}': this.props.accountsConfig.getLogArchiveAccountId(),
+      '\\${MANAGEMENT_ACCOUNT_ID}': this.props.accountsConfig.getManagementAccountId(),
+      '\\${REGION}': cdk.Stack.of(this).region,
+    };
+
+    if (organizationId) {
+      additionalReplacements['\\${ORG_ID}'] = organizationId;
+    }
+
+    policyContent = policyReplacements({
+      content: policyContent,
+      acceleratorPrefix,
+      managementAccountAccessRole: this.props.globalConfig.managementAccountAccessRole,
+      partition: this.props.partition,
+      additionalReplacements,
+      acceleratorName: this.props.globalConfig.externalLandingZoneResources?.acceleratorName || 'lza',
+    });
+
+    if (returnTempPath) {
+      return this.createTempFile(policyContent, tempFileName);
+    } else {
+      return policyContent;
+    }
+  }
+
+  /**
+   * Create a temp file of a transformed policy document
+   * @param policyContent
+   * @param tempFileName
+   * @returns
+   */
+  private createTempFile(policyContent: string, tempFileName?: string): string {
+    // Generate unique file path in temporary directory
+    let tempDir: string;
+    if (process.platform === 'win32') {
+      try {
+        fs.accessSync(process.env['Temp']!, fs.constants.W_OK);
+      } catch (e) {
+        this.logger.error(`Unable to write files to temp directory: ${e}`);
+      }
+      tempDir = path.join(process.env['Temp']!, 'temp-accelerator-policies');
+    } else {
+      try {
+        fs.accessSync('/tmp', fs.constants.W_OK);
+      } catch (e) {
+        this.logger.error(`Unable to write files to temp directory: ${e}`);
+      }
+      tempDir = path.join('/tmp', 'temp-accelerator-policies');
+    }
+    const tempPath = path.join(tempDir, tempFileName ?? `${uuidv4()}.json`);
+
+    // Write transformed file
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir);
+    }
+    fs.writeFileSync(tempPath, policyContent, 'utf-8');
+
+    return tempPath;
+  }
+
+  protected convertMinutesToIso8601(s: number) {
+    const days = Math.floor(s / 1440);
+    s = s - days * 1440;
+    const hours = Math.floor(s / 60);
+    s = s - hours * 60;
+
+    let dur = 'PT';
+    if (days > 0) {
+      dur += days + 'D';
+    }
+    if (hours > 0) {
+      dur += hours + 'H';
+    }
+    dur += s + 'M';
+
+    return dur.toString();
+  }
+
+  protected processBlockDeviceReplacements(blockDeviceMappings: BlockDeviceMappingItem[], appName: string) {
+    const mappings: BlockDeviceMappingItem[] = [];
+    blockDeviceMappings.forEach(device =>
+      mappings.push({
+        deviceName: device.deviceName,
+        ebs: device.ebs ? this.processKmsKeyReplacements(device, appName) : undefined,
+      }),
+    );
+
+    return mappings;
+  }
+
+  protected processKmsKeyReplacements(device: BlockDeviceMappingItem, appName: string): EbsItemConfig {
+    if (device.ebs!.kmsKeyId) {
+      return this.replaceKmsKeyIdProvided(device, appName);
+    }
+    if (device.ebs!.encrypted && this.props.securityConfig.centralSecurityServices.ebsDefaultVolumeEncryption.enable) {
+      return this.replaceKmsKeyDefaultEncryption(device, appName);
+    }
+
+    return {
+      deleteOnTermination: device.ebs!.deleteOnTermination,
+      encrypted: device.ebs!.encrypted,
+      iops: device.ebs!.iops,
+      kmsKeyId: device.ebs!.kmsKeyId,
+      snapshotId: device.ebs!.snapshotId,
+      throughput: device.ebs!.throughput,
+      volumeSize: device.ebs!.volumeSize,
+      volumeType: device.ebs!.volumeType,
+    };
+  }
+
+  protected replaceKmsKeyDefaultEncryption(device: BlockDeviceMappingItem, appName: string): EbsItemConfig {
+    let ebsEncryptionKey: cdk.aws_kms.Key;
+    // user set encryption as true and has default ebs encryption enabled
+    // user defined kms key is provided
+    if (this.props.securityConfig.centralSecurityServices.ebsDefaultVolumeEncryption.kmsKey) {
+      ebsEncryptionKey = cdk.aws_kms.Key.fromKeyArn(
+        this,
+        pascalCase(this.props.securityConfig.centralSecurityServices.ebsDefaultVolumeEncryption.kmsKey) +
+          pascalCase(`AcceleratorGetKey-${appName}-${device.deviceName}`) +
+          `-KmsKey`,
+        cdk.aws_ssm.StringParameter.valueForStringParameter(
+          this,
+          `${this.props.prefixes.ssmParamName}/kms/${this.props.securityConfig.centralSecurityServices.ebsDefaultVolumeEncryption.kmsKey}/key-arn`,
+        ),
+      ) as cdk.aws_kms.Key;
+    } else {
+      // user set encryption as true and has default ebs encryption enabled
+      // no kms key is provided
+      ebsEncryptionKey = cdk.aws_kms.Key.fromKeyArn(
+        this,
+        pascalCase(`AcceleratorGetKey-${appName}-${device.deviceName}-${device.ebs!.kmsKeyId}`),
+        cdk.aws_ssm.StringParameter.valueForStringParameter(
+          this,
+          `${this.props.prefixes.ssmParamName}/security-stack/ebsDefaultVolumeEncryptionKeyArn`,
+        ),
+      ) as cdk.aws_kms.Key;
+    }
+    return {
+      deleteOnTermination: device.ebs!.deleteOnTermination,
+      encrypted: device.ebs!.encrypted,
+      iops: device.ebs!.iops,
+      kmsKeyId: ebsEncryptionKey.keyId,
+      snapshotId: device.ebs!.snapshotId,
+      throughput: device.ebs!.throughput,
+      volumeSize: device.ebs!.volumeSize,
+      volumeType: device.ebs!.volumeType,
+    };
+  }
+
+  protected replaceKmsKeyIdProvided(device: BlockDeviceMappingItem, appName: string): EbsItemConfig {
+    const kmsKeyEntity = cdk.aws_kms.Key.fromKeyArn(
+      this,
+      pascalCase(`AcceleratorGetKey-${appName}-${device.deviceName}-${device.ebs!.kmsKeyId}`),
+      cdk.aws_ssm.StringParameter.valueForStringParameter(
+        this,
+        `${this.props.prefixes.ssmParamName}/kms/${device.ebs!.kmsKeyId}/key-arn`,
+      ),
+    ) as cdk.aws_kms.Key;
+    return {
+      deleteOnTermination: device.ebs!.deleteOnTermination,
+      encrypted: device.ebs!.encrypted,
+      iops: device.ebs!.iops,
+      kmsKeyId: kmsKeyEntity.keyId,
+      snapshotId: device.ebs!.snapshotId,
+      throughput: device.ebs!.throughput,
+      volumeSize: device.ebs!.volumeSize,
+      volumeType: device.ebs!.volumeType,
+    };
+  }
+
+  protected replaceImageId(imageId: string) {
+    if (imageId.match('\\${ACCEL_LOOKUP::ImageId:(.*)}')) {
+      const imageIdMatch = imageId.match('\\${ACCEL_LOOKUP::ImageId:(.*)}');
+      return cdk.aws_ssm.StringParameter.valueForStringParameter(this, imageIdMatch![1]);
+    } else {
+      return imageId;
+    }
+  }
+
+  /**
+   * Public accessor method to add SSM parameters
+   * @param props
+   */
+  public addSsmParameter(props: { logicalId: string; parameterName: string; stringValue: string }) {
+    this.ssmParameters.push({
+      logicalId: props.logicalId,
+      parameterName: props.parameterName,
+      stringValue: props.stringValue,
+    });
+  }
+
+  /**
+   * Helper function to verify if resource managed by ASEA or not by looking in resource mapping
+   * Can be replaced with LZA Configuration check. Not using configuration check to avoid errors/mistakes in configuration by user
+   *
+   * @param resourceType
+   * @param resourceIdentifier
+   * @returns
+   */
+  public isManagedByAsea(resourceType: string, resourceIdentifier: string): boolean {
+    if (!this.props.globalConfig.externalLandingZoneResources?.importExternalLandingZoneResources) return false;
+    const aseaResourceList = this.props.globalConfig.externalLandingZoneResources.resourceList;
+    return !!aseaResourceList.find(
+      r =>
+        r.accountId === cdk.Stack.of(this).account &&
+        r.region === cdk.Stack.of(this).region &&
+        r.resourceType === resourceType &&
+        r.resourceIdentifier === resourceIdentifier,
+    );
+  }
+
+  public getExternalResourceParameter(name: string) {
+    if (!this.externalResourceParameters) throw new Error(`No ssm parameter "${name}" found in account and region`);
+    return this.externalResourceParameters[name];
   }
 }

@@ -12,15 +12,16 @@
  */
 
 import { CertificateConfig } from '@aws-accelerator/config';
-import { CreateCertificate } from '@aws-accelerator/constructs';
+import { Certificate } from '@aws-accelerator/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { NagSuppressions } from 'cdk-nag';
 import { pascalCase } from 'pascal-case';
 import { AcceleratorStackProps } from '../../accelerator-stack';
 import { LogLevel, NetworkStack } from '../network-stack';
+import { SsmResourceType } from '@aws-accelerator/utils';
 
 export class AcmResources {
-  public readonly certificateMap: Map<string, CreateCertificate>;
+  public readonly certificateMap: Map<string, Certificate>;
   private stack: NetworkStack;
 
   constructor(networkStack: NetworkStack, props: AcceleratorStackProps) {
@@ -33,17 +34,22 @@ export class AcmResources {
   /**
    * Create ACM certificates - check whether ACM should be deployed
    */
-  private createCertificates(props: AcceleratorStackProps): Map<string, CreateCertificate> {
-    const certificateMap = new Map<string, CreateCertificate>();
+  private createCertificates(props: AcceleratorStackProps): Map<string, Certificate> {
+    const certificateMap = new Map<string, Certificate>();
     this.stack.addLogs(LogLevel.INFO, 'Evaluating AWS Certificate Manager certificates.');
     for (const certificate of props.networkConfig.certificates ?? []) {
       if (!this.stack.isIncluded(certificate.deploymentTargets)) {
-        this.stack.addLogs(LogLevel.INFO, 'Item excluded');
+        this.stack.addLogs(
+          LogLevel.INFO,
+          `Account (${cdk.Stack.of(this.stack).account}) ACM certificate ${certificate.name} excluded.`,
+        );
         continue;
       }
       this.stack.addLogs(
         LogLevel.INFO,
-        `Account (${cdk.Stack.of(this.stack).account}) should be included, deploying ACM certificates.`,
+        `Account (${cdk.Stack.of(this.stack).account}) should be included, deploying ACM certificate ${
+          certificate.name
+        }.`,
       );
       const certificateResource = this.createAcmCertificates(certificate, props);
       certificateMap.set(certificate.name, certificateResource);
@@ -54,11 +60,11 @@ export class AcmResources {
   /**
    * Create ACM certificates
    */
-  private createAcmCertificates(certificate: CertificateConfig, props: AcceleratorStackProps): CreateCertificate {
+  private createAcmCertificates(certificate: CertificateConfig, props: AcceleratorStackProps): Certificate {
     const resourceName = pascalCase(`${certificate.name}`);
 
-    const acmCertificate = new CreateCertificate(this.stack, resourceName, {
-      name: certificate.name,
+    const acmCertificate = new Certificate(this.stack, resourceName, {
+      parameterName: this.stack.getSsmPath(SsmResourceType.ACM_CERT, [certificate.name]),
       type: certificate.type,
       privKey: certificate.privKey,
       cert: certificate.cert,
@@ -66,13 +72,14 @@ export class AcmResources {
       validation: certificate.validation,
       domain: certificate.domain,
       san: certificate.san,
-      cloudWatchLogsKmsKey: this.stack.cloudwatchKey,
-      logRetentionInDays: this.stack.logRetention,
       homeRegion: props.globalConfig.homeRegion,
       assetFunctionRoleName: this.stack.acceleratorResourceNames.roles.assetFunctionRoleName,
       assetBucketName: `${
         this.stack.acceleratorResourceNames.bucketPrefixes.assets
       }-${props.accountsConfig.getManagementAccountId()}-${props.globalConfig.homeRegion}`,
+      cloudWatchLogsKmsKey: this.stack.cloudwatchKey,
+      logRetentionInDays: this.stack.logRetention,
+      isExisting: certificate.isExisting,
     });
 
     // AwsSolutions-IAM5: The IAM entity contains wildcard permissions and does not have a cdk_nag rule suppression with evidence for those permission

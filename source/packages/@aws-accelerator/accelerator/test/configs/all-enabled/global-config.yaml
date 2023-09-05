@@ -20,9 +20,30 @@ snsTopics:
 terminationProtection: true
 controlTower:
   enable: true
+  controls:
+    - identifier: AWS-GR_RESTRICT_ROOT_USER_ACCESS_KEYS
+      enable: true
+      deploymentTargets:
+        organizationalUnits:
+          - SecureWorkloads
+    - identifier: AWS-GR_EBS_OPTIMIZED_INSTANCE
+      enable: true
+      deploymentTargets:
+        organizationalUnits:
+          - SecureWorkloads
+    - identifier: AWS-GR_RESTRICTED_COMMON_PORTS
+      enable: false
+      deploymentTargets:
+        organizationalUnits:
+          - SecureWorkloads
+    - identifier: AWS-GR_RDS_SNAPSHOTS_PUBLIC_PROHIBITED
+      enable: false
+      deploymentTargets:
+        organizationalUnits:
+          - SecureWorkloads
 cdkOptions:
   centralizeBuckets: true
-  useManagementAccessRole: false
+  useManagementAccessRole: true
 logging:
   account: LogArchive
   centralizedLoggingRegion: us-west-2
@@ -45,7 +66,25 @@ logging:
           sendToCloudWatchLogs: true
           apiErrorRateInsight: false
           apiCallRateInsight: false
- 
+
+      
+  accessLogBucket:
+    importedBucket: 
+      name: existing-access-logs-bucket-${ACCOUNT_ID}-${REGION}
+    customPolicyOverrides:
+      policy: bucket-policies/full-access-log-bucket.json
+    # s3ResourcePolicyAttachments:
+    #   - policy: bucket-policies/access-logs-bucket.json
+    lifecycleRules: []
+  elbLogBucket:
+    importedBucket: 
+      name: existing-elb-logs-bucket-${ACCOUNT_ID}-${REGION}
+      applyAcceleratorManagedBucketPolicy: true
+    # customPolicyOverrides:
+    #   policy: bucket-policies/full-elb-log-bucket.json
+    s3ResourcePolicyAttachments:
+      - policy: bucket-policies/elb-logs-bucket.json
+    lifecycleRules: []
 
   sessionManager:
     sendToCloudWatchLogs: false
@@ -53,6 +92,7 @@ logging:
   cloudwatchLogs:
     enable: true
     dynamicPartitioning: dynamic-partitioning/log-filters.json
+    replaceLogDestinationArn: replaceLogDestinationArn  
     
     exclusions:
       - organizationalUnits:
@@ -146,3 +186,21 @@ backup:
       deploymentTargets:
         organizationalUnits:
           - Root
+    - name: InfrastructureVault
+      deploymentTargets:
+        accounts:
+          - Management
+      policy: backup-vault-policies/infrastructure-vault-policy.json
+ssmParameters:
+  - deploymentTargets:
+      organizationalUnits:
+        - Infrastructure
+      accounts:
+        - Management
+    parameters:
+      - name: parameterTest
+        path: /my/parameter/structure
+        value: parameterTestValue
+      - name: someOtherName
+        path: /my/account/structure
+        value: someOtherValue

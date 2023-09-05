@@ -12,7 +12,8 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
-import { Bucket, BucketEncryptionType, BucketAccessType } from '../../lib/aws-s3/bucket';
+import { BucketAccessType } from '@aws-accelerator/utils';
+import { Bucket, BucketEncryptionType } from '../../lib/aws-s3/bucket';
 import { snapShotTest } from '../snapshot-test';
 import { describe, it, expect } from '@jest/globals';
 
@@ -39,6 +40,8 @@ describe('Bucket', () => {
         },
         kmsKey: new cdk.aws_kms.Key(stack, 'CWLKey', {}),
         logRetentionInDays: 3653,
+        useExistingRoles: false,
+        acceleratorPrefix: 'AWSAccelerator',
       },
     });
     // test methods to call bucket and bucket kms key
@@ -65,6 +68,8 @@ describe('Bucket', () => {
         },
         kmsKey: new cdk.aws_kms.Key(stack, 'CWLKey1', {}),
         logRetentionInDays: 3653,
+        useExistingRoles: false,
+        acceleratorPrefix: 'AWSAccelerator',
       },
     });
   });
@@ -82,6 +87,8 @@ describe('Bucket', () => {
         },
         kmsKey: new cdk.aws_kms.Key(stack, 'CWLKey2', {}),
         logRetentionInDays: 3653,
+        useExistingRoles: false,
+        acceleratorPrefix: 'AWSAccelerator',
       },
     });
   });
@@ -98,6 +105,8 @@ describe('Bucket', () => {
         },
         kmsKey: new cdk.aws_kms.Key(stack, 'CWLKey4', {}),
         logRetentionInDays: 3653,
+        useExistingRoles: false,
+        acceleratorPrefix: 'AWSAccelerator',
       },
     });
   });
@@ -115,6 +124,8 @@ describe('Bucket', () => {
           },
           kmsKey: new cdk.aws_kms.Key(stack, 'CWLKey4', {}),
           logRetentionInDays: 3653,
+          useExistingRoles: false,
+          acceleratorPrefix: 'AWSAccelerator',
         },
       });
       noKmsBucket.getKey().keyArn;
@@ -137,6 +148,8 @@ describe('Bucket', () => {
         },
         kmsKey: new cdk.aws_kms.Key(stack, 'CWLKey5', {}),
         logRetentionInDays: 3653,
+        useExistingRoles: false,
+        acceleratorPrefix: 'AWSAccelerator',
       },
     });
   });
@@ -153,6 +166,8 @@ describe('Bucket', () => {
           },
           kmsKey: new cdk.aws_kms.Key(stack, 'CWLKey6', {}),
           logRetentionInDays: 3653,
+          useExistingRoles: false,
+          acceleratorPrefix: 'AWSAccelerator',
         },
       });
     }
@@ -174,6 +189,8 @@ describe('Bucket', () => {
           },
           kmsKey: new cdk.aws_kms.Key(stack, 'CWLKeyTooMuchServerAccess', {}),
           logRetentionInDays: 3653,
+          useExistingRoles: false,
+          acceleratorPrefix: 'AWSAccelerator',
         },
       });
     }
@@ -197,6 +214,8 @@ describe('Bucket', () => {
           },
           kmsKey: new cdk.aws_kms.Key(stack, 'CWLKeyNoBucketAccessToAwsPrincipal', {}),
           logRetentionInDays: 3653,
+          useExistingRoles: false,
+          acceleratorPrefix: 'AWSAccelerator',
         },
       });
     }
@@ -214,7 +233,7 @@ describe('Bucket', () => {
           abortIncompleteMultipartUploadAfter: 1,
           enabled: true,
           expiration: 24,
-          expiredObjectDeleteMarker: true,
+          expiredObjectDeleteMarker: false,
           noncurrentVersionExpiration: 12,
           transitions: [
             {

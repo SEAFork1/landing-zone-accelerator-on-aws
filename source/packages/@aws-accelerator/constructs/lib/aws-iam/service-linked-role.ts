@@ -13,24 +13,12 @@
 
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 /**
  * Initialized ServiceLinkedRoleProps properties
  */
 export interface ServiceLinkedRoleProps {
-  /**
-   * Custom resource lambda environment encryption key
-   */
-  readonly environmentEncryptionKmsKey: cdk.aws_kms.IKey;
-  /**
-   * Custom resource lambda log group encryption key
-   */
-  readonly cloudWatchLogKmsKey: cdk.aws_kms.IKey;
-  /**
-   * Custom resource lambda log retention in days
-   */
-  readonly cloudWatchLogRetentionInDays: number;
   /**
    * Service linked role service name
    */
@@ -46,6 +34,18 @@ export interface ServiceLinkedRoleProps {
    * for autoscaling.amazonaws.com roleName would be AWSServiceRoleForAutoScaling
    */
   readonly roleName: string;
+  /**
+   * Custom resource lambda environment encryption key
+   */
+  readonly environmentEncryptionKmsKey: cdk.aws_kms.IKey;
+  /**
+   * Custom resource lambda log group encryption key
+   */
+  readonly cloudWatchLogKmsKey: cdk.aws_kms.IKey;
+  /**
+   * Custom resource lambda log retention in days
+   */
+  readonly cloudWatchLogRetentionInDays: number;
 }
 
 /**
@@ -62,6 +62,7 @@ export class ServiceLinkedRole extends Construct {
       runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       handler: 'index.handler',
       timeout: cdk.Duration.minutes(15),
+      memorySize: 256,
       description: 'Custom resource provider to create service linked role',
       initialPolicy: [
         new cdk.aws_iam.PolicyStatement({

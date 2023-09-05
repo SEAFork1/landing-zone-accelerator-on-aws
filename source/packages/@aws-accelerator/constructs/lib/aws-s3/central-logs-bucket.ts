@@ -14,8 +14,9 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { Bucket, BucketEncryptionType } from '@aws-accelerator/constructs';
-import { BucketAccessType, S3LifeCycleRule } from './bucket';
+import { S3LifeCycleRule } from './bucket';
 import { BucketPrefixProps } from './bucket-prefix';
+import { AwsPrincipalAccessesType, BucketAccessType } from '@aws-accelerator/utils';
 
 export interface CentralLogsBucketProps {
   s3BucketName: string;
@@ -23,7 +24,7 @@ export interface CentralLogsBucketProps {
   kmsDescription: string;
   principalOrgIdCondition: { [key: string]: string | string[] };
   orgPrincipals: cdk.aws_iam.IPrincipal;
-  serverAccessLogsBucket: Bucket;
+  serverAccessLogsBucket: cdk.aws_s3.IBucket;
   s3LifeCycleRules?: S3LifeCycleRule[];
   /**
    * @optional
@@ -33,7 +34,7 @@ export interface CentralLogsBucketProps {
    * values BucketAccessType.READONLY, BucketAccessType.WRITEONLY, & and
    * BucketAccessType.READWRITE
    */
-  awsPrincipalAccesses?: { name: string; principal: string; accessType: string }[];
+  awsPrincipalAccesses?: AwsPrincipalAccessesType[];
   bucketPrefixProps?: BucketPrefixProps;
   /**
    * Accelerator Prefix
@@ -66,7 +67,7 @@ export class CentralLogsBucket extends Construct {
       s3BucketName: props.s3BucketName,
       kmsAliasName: props.kmsAliasName,
       kmsDescription: props.kmsDescription,
-      serverAccessLogsBucket: props.serverAccessLogsBucket.getS3Bucket(),
+      serverAccessLogsBucket: props.serverAccessLogsBucket,
       s3LifeCycleRules: props.s3LifeCycleRules,
       awsPrincipalAccesses: awsPrincipalAccesses.filter(item => item.accessType !== BucketAccessType.NO_ACCESS),
       bucketPrefixProps: props.bucketPrefixProps,
